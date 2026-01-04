@@ -7,7 +7,13 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
-from .executor import ExecutionError, Executor
+from .executor import (
+    ExecutionError,
+    Executor,
+    MissingInputError,
+    MissingOutputError,
+    UnproducibleInputError,
+)
 from .resolver import CyclicDependencyError, DependencyResolver
 from .task import TaskRegistry, task
 
@@ -117,6 +123,15 @@ def cmd_run(
             print("Nothing to do (all targets up to date).")
 
     except CyclicDependencyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except UnproducibleInputError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except MissingInputError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except MissingOutputError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     except ExecutionError as e:

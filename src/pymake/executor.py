@@ -20,6 +20,40 @@ class ExecutionError(Exception):
         super().__init__(f"Task '{task_name}' failed: {original}")
 
 
+class MissingInputError(Exception):
+    """Raised when a task's input file is missing."""
+
+    def __init__(self, task_name: str, input_path: str) -> None:
+        self.task_name = task_name
+        self.input_path = input_path
+        super().__init__(
+            f"Task '{task_name}' requires input '{input_path}' which does not exist"
+        )
+
+
+class MissingOutputError(Exception):
+    """Raised when a task fails to produce a declared output."""
+
+    def __init__(self, task_name: str, output_path: str) -> None:
+        self.task_name = task_name
+        self.output_path = output_path
+        super().__init__(
+            f"Task '{task_name}' did not produce declared output '{output_path}'"
+        )
+
+
+class UnproducibleInputError(Exception):
+    """Raised when an input file doesn't exist and no task produces it."""
+
+    def __init__(self, task_name: str, input_path: str) -> None:
+        self.task_name = task_name
+        self.input_path = input_path
+        super().__init__(
+            f"Task '{task_name}' requires input '{input_path}' which does not exist "
+            f"and no task produces it"
+        )
+
+
 class Executor:
     """Executes tasks with dependency resolution."""
 
@@ -67,10 +101,23 @@ class Executor:
         except CyclicDependencyError:
             raise
 
+        # Validate all inputs are either existing or producible
+        self._validate_inputs_producible(execution_order)
+
         if self.parallel:
             return self._run_parallel(execution_order)
         else:
             return self._run_sequential(execution_order)
+
+    def _validate_inputs_producible(self, tasks: list[Task]) -> None:
+        """Validate that all input files either exist or have a producing task."""
+        for task in tasks:
+            for input_path in task.inputs:
+                if not input_path.exists():
+                    # Check if any task produces this file
+                    producing_task = self.registry.get_by_output(input_path)
+                    if not producing_task:
+                        raise UnproducibleInputError(task.name, str(input_path))
 
     def _run_sequential(self, tasks: list[Task]) -> bool:
         """Run tasks sequentially in dependency order."""
@@ -195,12 +242,24 @@ class Executor:
             except Exception as e:
                 raise ExecutionError(task.name, e) from e
 
+        # Validate all input files exist before running
+        for input_path in task.inputs:
+            if not input_path.exists():
+                raise MissingInputError(task.name, str(input_path))
+
         # Execute the task
         self.log(f"[run] {task.name}")
         try:
             task.func()
         except Exception as e:
             raise ExecutionError(task.name, e) from e
+
+        # Validate all output files were created (excluding touch file)
+        for output_path in task.outputs:
+            if task.touch and output_path == task.touch:
+                continue  # Touch file is created by executor, not the task
+            if not output_path.exists():
+                raise MissingOutputError(task.name, str(output_path))
 
         # Touch file if specified
         if task.touch:

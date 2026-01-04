@@ -143,7 +143,16 @@ The `touch` file is automatically created after successful execution and counts 
 When comparing timestamps:
 - pymake uses the **oldest** output file's mtime
 - If **any** input is newer than this, the task runs
-- Missing input files are ignored (no error, no trigger)
+
+### Input/Output validation
+
+pymake enforces strict validation of input and output files:
+
+1. **Before execution**: Each input file must either exist OR have a task that produces it. If neither is true, an error is raised immediately.
+
+2. **At task execution**: All input files must exist when a task runs. If a producing task failed to create its outputs, dependent tasks will error.
+
+3. **After task execution**: All declared output files must exist after the task completes (excluding `touch` files, which are created automatically by pymake).
 
 ## Custom Conditions
 
@@ -206,3 +215,6 @@ pymake graph build | dot -Tpng > deps.png
 - Cyclic dependencies are detected and reported
 - Duplicate output files across tasks raise an error
 - Task failures stop execution and report the error
+- Missing input files (not produced by any task) raise `UnproducibleInputError`
+- Input files that don't exist at execution time raise `MissingInputError`
+- Output files not created by a task raise `MissingOutputError`
