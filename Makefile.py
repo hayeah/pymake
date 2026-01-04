@@ -5,50 +5,33 @@ from pathlib import Path
 from pymake import sh
 
 
-@task(outputs=["build/.ruff-check"])
+@task()
 def lint():
     """Run ruff linter."""
-    Path("build").mkdir(exist_ok=True)
-    sh("ruff check pymake")
-    Path("build/.ruff-check").touch()
-
-
-@task(outputs=["build/.mypy-check"])
-def typecheck():
-    """Run mypy type checker."""
-    Path("build").mkdir(exist_ok=True)
-    sh("mypy pymake")
-    Path("build/.mypy-check").touch()
-
-
-@task(outputs=["build/.pytest-done"])
-def test():
-    """Run pytest."""
-    Path("build").mkdir(exist_ok=True)
-    sh("pytest -v pymake")
-    Path("build/.pytest-done").touch()
-
-
-@task(inputs=["build/.ruff-check", "build/.mypy-check", "build/.pytest-done"])
-def check():
-    """Run all checks (lint, typecheck, test)."""
-    print("All checks passed!")
+    sh("ruff check src/pymake")
 
 
 @task()
-def clean():
-    """Clean build artifacts."""
-    import shutil
+def typecheck():
+    """Run mypy type checker."""
+    sh("mypy src/pymake")
 
-    if Path("build").exists():
-        shutil.rmtree("build")
-        print("Cleaned build directory.")
-    else:
-        print("Nothing to clean.")
 
+@task()
+def test():
+    """Run pytest."""
+    sh("pytest -v src/pymake")
+
+
+@task()
+def check():
+    """Run all checks (lint, typecheck, test)."""
+    sh("ruff check src/pymake")
+    sh("mypy src/pymake")
+    sh("pytest -v src/pymake")
 
 @task()
 def format():
     """Format code with ruff."""
-    sh("ruff format pymake")
-    sh("ruff check --fix pymake", check=False)
+    sh("ruff format src/pymake")
+    sh("ruff check --fix src/pymake", check=False)
