@@ -15,7 +15,7 @@ from .executor import (
     UnproducibleInputError,
 )
 from .resolver import CyclicDependencyError, DependencyResolver
-from .task import TaskRegistry, task
+from .task import Task, TaskRegistry, task
 
 
 def load_makefile(path: Path) -> None:
@@ -91,6 +91,44 @@ def cmd_graph(registry: TaskRegistry, target: str) -> None:
     print(dot)
 
 
+def cmd_which(registry: TaskRegistry, output: str) -> None:
+    """Show reverse dependency tree for an output file."""
+    output_path = Path(output)
+    task = registry.get_by_output(output_path)
+
+    if not task:
+        print(f"Error: No task produces '{output}'", file=sys.stderr)
+        sys.exit(1)
+
+    resolver = DependencyResolver(registry)
+
+    def print_tree(t: Task, prefix: str = "", is_last: bool = True) -> None:
+        connector = "└── " if is_last else "├── "
+        print(f"{prefix}{connector}{t.name}")
+
+        child_prefix = prefix + ("    " if is_last else "│   ")
+        deps = resolver.get_dependencies(t)
+        has_deps = len(deps) > 0
+
+        # Inputs (←) - no horizontal branch
+        for inp in t.inputs:
+            vert = "│" if has_deps else " "
+            print(f"{child_prefix}{vert} ← {inp}")
+
+        # Outputs (→) - no horizontal branch
+        for out in t.outputs:
+            vert = "│" if has_deps else " "
+            print(f"{child_prefix}{vert} → {out}")
+
+        # Dependencies (recursive) - with horizontal branch
+        for i, dep in enumerate(deps):
+            print_tree(dep, child_prefix, i == len(deps) - 1)
+
+    # Print the output file first, then the producing task
+    print(output_path)
+    print_tree(task)
+
+
 def cmd_run(
     registry: TaskRegistry,
     targets: list[str],
@@ -153,7 +191,7 @@ def main(argv: list[str] | None = None) -> NoReturn:
         argv = sys.argv[1:]
 
     # Known subcommands
-    subcommands = {"list", "graph", "run", "help"}
+    subcommands = {"list", "graph", "run", "which", "help"}
 
     # Check if first non-option arg is a subcommand
     # If not, treat all non-option trailing args as targets
@@ -252,6 +290,12 @@ def main(argv: list[str] | None = None) -> NoReturn:
     run_parser = subparsers.add_parser("run", help="Run specified targets")
     run_parser.add_argument("targets", nargs="+", help="Targets to run")
 
+    # which command
+    which_parser = subparsers.add_parser(
+        "which", help="Show reverse dependency tree for an output"
+    )
+    which_parser.add_argument("output", help="Output file to trace")
+
     # help command
     subparsers.add_parser("help", help="Show help")
 
@@ -282,6 +326,10 @@ def main(argv: list[str] | None = None) -> NoReturn:
             force=args.force,
             quiet=args.quiet,
         )
+        sys.exit(0)
+
+    elif args.command == "which":
+        cmd_which(task, args.output)
         sys.exit(0)
 
     elif args.command == "help":

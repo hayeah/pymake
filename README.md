@@ -167,6 +167,18 @@ def deploy():
     sh("./deploy.sh")
 ```
 
+Use `run_if_not` for the inverse (skip if condition is true):
+
+```python
+def is_ci():
+    return os.environ.get("CI") == "1"
+
+@task(run_if_not=is_ci)
+def local_only():
+    """Only runs locally, skipped in CI."""
+    sh("./local-setup.sh")
+```
+
 ## CLI Reference
 
 ```
@@ -175,6 +187,7 @@ pymake [options] [command] [targets...]
 Commands:
   list [--all]       List tasks with docstrings (--all includes dynamic tasks)
   graph <target>     Output DOT graph of dependencies
+  which <output>     Show reverse dependency tree for an output file
   run <targets>      Run specified targets
   help               Show help
 
@@ -209,6 +222,25 @@ Generate a DOT graph for visualization:
 ```bash
 pymake graph build | dot -Tpng > deps.png
 ```
+
+## Reverse Dependency Lookup
+
+Find which task produces an output file and trace its dependencies:
+
+```bash
+$ pymake which final.txt
+final.txt
+└── finalize
+    │ ← derived.txt
+    │ → final.txt
+    └── process
+        │ ← base.txt
+        │ → derived.txt
+        └── generate_base
+              → base.txt
+```
+
+The tree shows inputs (←) and outputs (→) for each task.
 
 ## Error Handling
 
