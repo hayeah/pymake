@@ -9,19 +9,17 @@ from typing import NoReturn
 
 from .executor import ExecutionError, Executor
 from .resolver import CyclicDependencyError, DependencyResolver
-from .task import TaskRegistry
+from .task import TaskRegistry, task
 
 
-def load_makefile(path: Path, registry: TaskRegistry) -> None:
+def load_makefile(path: Path) -> None:
     """Load and execute a Makefile.py."""
     if not path.exists():
         print(f"Error: {path} not found", file=sys.stderr)
         sys.exit(1)
 
-    # Make the task registry available as 'task' in the Makefile
     code = path.read_text()
     globals_dict = {
-        "task": registry,
         "__name__": "__main__",
         "__file__": str(path.resolve()),
     }
@@ -194,18 +192,15 @@ def main(argv: list[str] | None = None) -> NoReturn:
         parser.add_argument("targets", nargs="+", help="Targets to run")
         args = parser.parse_args(argv)
 
-        # Create a fresh registry for this run
-        registry = TaskRegistry()
-
-        # Load the Makefile
-        makefile_path = Path(args.file)
-        load_makefile(makefile_path, registry)
+        # Clear and load the Makefile
+        task.clear()
+        load_makefile(Path(args.file))
 
         # Handle -j implying parallel
         parallel = args.parallel or args.jobs is not None
 
         cmd_run(
-            registry,
+            task,
             args.targets,
             parallel=parallel,
             jobs=args.jobs,
@@ -242,28 +237,25 @@ def main(argv: list[str] | None = None) -> NoReturn:
 
     args = parser.parse_args(argv)
 
-    # Create a fresh registry for this run
-    registry = TaskRegistry()
-
-    # Load the Makefile
-    makefile_path = Path(args.file)
-    load_makefile(makefile_path, registry)
+    # Clear and load the Makefile
+    task.clear()
+    load_makefile(Path(args.file))
 
     # Handle -j implying parallel
     parallel = args.parallel or args.jobs is not None
 
     # Dispatch commands
     if args.command == "list":
-        cmd_list(registry, args.all_tasks)
+        cmd_list(task, args.all_tasks)
         sys.exit(0)
 
     elif args.command == "graph":
-        cmd_graph(registry, args.target)
+        cmd_graph(task, args.target)
         sys.exit(0)
 
     elif args.command == "run":
         cmd_run(
-            registry,
+            task,
             args.targets,
             parallel=parallel,
             jobs=args.jobs,

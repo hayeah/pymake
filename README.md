@@ -13,7 +13,7 @@ pip install -e .
 Create a `Makefile.py` in your project:
 
 ```python
-from pymake import sh
+from pymake import sh, task
 
 @task(outputs=["build/app"])
 def build():

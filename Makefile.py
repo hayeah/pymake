@@ -1,8 +1,6 @@
 """Makefile.py for pymake project."""
 
-from pathlib import Path
-
-from pymake import sh
+from pymake import sh, task
 
 
 @task()
