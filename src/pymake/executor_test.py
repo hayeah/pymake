@@ -142,3 +142,66 @@ class TestExecutor:
         assert "c" in executed
         assert executed.index("a") < executed.index("c")
         assert executed.index("b") < executed.index("c")
+
+    def test_touch_creates_file(self) -> None:
+        registry = TaskRegistry()
+        executed = []
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            touch_file = Path(tmpdir) / "build" / ".task-done"
+
+            registry.register(
+                lambda: executed.append("a"),
+                name="a",
+                touch=str(touch_file),
+            )
+
+            assert not touch_file.exists()
+
+            executor = Executor(registry, verbose=False)
+            executor.run("a")
+
+            assert executed == ["a"]
+            assert touch_file.exists()
+
+            # Second run should skip (touch file exists, no inputs)
+            executed.clear()
+            executor.run("a")
+            assert executed == []
+
+    def test_touch_with_inputs(self) -> None:
+        registry = TaskRegistry()
+        executed = []
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_file = Path(tmpdir) / "input.txt"
+            touch_file = Path(tmpdir) / ".task-done"
+
+            input_file.write_text("test")
+
+            registry.register(
+                lambda: executed.append("a"),
+                name="a",
+                inputs=[str(input_file)],
+                touch=str(touch_file),
+            )
+
+            executor = Executor(registry, verbose=False)
+            executor.run("a")
+            assert executed == ["a"]
+            assert touch_file.exists()
+
+            # Second run should skip
+            executed.clear()
+            executor.run("a")
+            assert executed == []
+
+            # Update input file - should run again
+            import time
+
+            time.sleep(0.01)
+            input_file.write_text("updated")
+
+            executed.clear()
+            executor.run("a")
+            assert executed == ["a"]

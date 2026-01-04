@@ -44,8 +44,22 @@ pymake -p check   # Run in parallel
 ```python
 @task(inputs=["src/main.c"], outputs=["build/main.o"])
 def compile():
+    """Compile main.c to object file."""
     sh("gcc -c src/main.c -o build/main.o")
 ```
+
+### Touch files
+
+Use `touch` for tasks that don't produce output files but should track execution:
+
+```python
+@task(touch="build/.lint-done")
+def lint():
+    """Run linter."""
+    sh("ruff check src/")
+```
+
+The touch file is created after the task runs and acts as an output for dependency tracking.
 
 ### Dynamic registration
 
@@ -56,28 +70,52 @@ from pymake import task
 for src in Path("src").glob("*.c"):
     obj = Path("build") / (src.stem + ".o")
 
-    def make_compile(s=src, o=obj):
-        def run():
-            sh(f"gcc -c {s} -o {o}")
-        return run
+    def run(s=src, o=obj):
+        sh(f"gcc -c {s} -o {o}")
 
     task.register(
-        make_compile(),
+        run,
         name=f"cc:{src}",
         inputs=[src],
         outputs=[obj],
     )
 ```
 
+**Note:** Use default arguments (`s=src, o=obj`) to capture loop variables. Without this, all tasks would reference the final loop values due to Python's closure semantics.
+
 ## Execution Semantics
 
-| Condition | Behavior |
-|-----------|----------|
-| No outputs | Always run (phony target) |
-| Output missing | Run |
-| Input newer than output | Run |
-| Output exists, no inputs | Skip |
-| `--force` flag | Always run |
+A task runs if **any** of these conditions are true (checked in order):
+
+1. **Force flag**: `-B` or `--force` was specified
+2. **Phony target**: Task has no outputs (and no `touch` file)
+3. **Missing output**: Any output file does not exist
+4. **Stale output**: Any input file is newer than the oldest output file
+
+A task is **skipped** if:
+
+- All outputs exist AND no inputs are defined (nothing to compare)
+- All outputs exist AND all inputs are older than the oldest output
+- `run_if` callback returns `False` (checked after file conditions)
+
+### Output files
+
+Outputs can be specified via `outputs` or `touch`:
+
+```python
+@task(outputs=["build/app"])      # Explicit output file
+@task(touch="build/.done")        # Touch file (auto-created after task runs)
+@task()                           # Phony - always runs
+```
+
+The `touch` file is automatically created after successful execution and counts as an output.
+
+### Timestamp comparison
+
+When comparing timestamps:
+- pymake uses the **oldest** output file's mtime
+- If **any** input is newer than this, the task runs
+- Missing input files are ignored (no error, no trigger)
 
 ## Custom Conditions
 
@@ -98,7 +136,7 @@ def deploy():
 pymake [options] [command] [targets...]
 
 Commands:
-  list [--all]       List tasks (--all includes dynamic tasks)
+  list [--all]       List tasks with docstrings (--all includes dynamic tasks)
   graph <target>     Output DOT graph of dependencies
   run <targets>      Run specified targets
   help               Show help

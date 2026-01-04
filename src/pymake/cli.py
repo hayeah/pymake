@@ -60,14 +60,14 @@ def cmd_list(registry: TaskRegistry, all_tasks: bool) -> None:
     if named:
         print("Tasks:")
         for t in sorted(named, key=lambda x: x.name):
-            outputs = ", ".join(str(o) for o in t.outputs) if t.outputs else "(phony)"
-            print(f"  {t.name}: {outputs}")
+            doc = f" - {t.doc}" if t.doc else ""
+            print(f"  {t.name}{doc}")
 
     if all_tasks and dynamic:
         print("\nDynamic tasks:")
         for t in sorted(dynamic, key=lambda x: x.name):
-            outputs = ", ".join(str(o) for o in t.outputs) if t.outputs else "(phony)"
-            print(f"  {t.name}: {outputs}")
+            doc = f" - {t.doc}" if t.doc else ""
+            print(f"  {t.name}{doc}")
 
 
 def cmd_graph(registry: TaskRegistry, target: str) -> None:

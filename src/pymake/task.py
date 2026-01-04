@@ -16,6 +16,8 @@ class Task:
     inputs: tuple[Path, ...]
     outputs: tuple[Path, ...]
     run_if: Callable[[], bool] | None = None
+    doc: str | None = None
+    touch: Path | None = None
 
     @property
     def is_phony(self) -> bool:
@@ -66,6 +68,7 @@ class TaskRegistry:
         inputs: Sequence[str | Path] = (),
         outputs: Sequence[str | Path] = (),
         run_if: Callable[[], bool] | None = None,
+        touch: str | Path | None = None,
     ) -> Task:
         """Register a task with the given parameters."""
         task_name = name or func.__name__
@@ -73,6 +76,11 @@ class TaskRegistry:
         # Normalize paths
         input_paths = tuple(Path(p) for p in inputs)
         output_paths = tuple(Path(p) for p in outputs)
+        touch_path = Path(touch) if touch else None
+
+        # Touch file is also an output
+        if touch_path:
+            output_paths = (*output_paths, touch_path)
 
         # Check for output conflicts
         for out in output_paths:
@@ -91,6 +99,8 @@ class TaskRegistry:
             inputs=input_paths,
             outputs=output_paths,
             run_if=run_if,
+            doc=func.__doc__,
+            touch=touch_path,
         )
 
         if task_name in self._tasks:
@@ -109,11 +119,14 @@ class TaskRegistry:
         inputs: Sequence[str | Path] = (),
         outputs: Sequence[str | Path] = (),
         run_if: Callable[[], bool] | None = None,
+        touch: str | Path | None = None,
     ) -> Callable[[Callable[[], None]], Callable[[], None]]:
         """Decorator to register a task."""
 
         def decorator(func: Callable[[], None]) -> Callable[[], None]:
-            self.register(func, inputs=inputs, outputs=outputs, run_if=run_if)
+            self.register(
+                func, inputs=inputs, outputs=outputs, run_if=run_if, touch=touch
+            )
             return func
 
         return decorator

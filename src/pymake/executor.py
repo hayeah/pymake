@@ -202,6 +202,11 @@ class Executor:
         except Exception as e:
             raise ExecutionError(task.name, e) from e
 
+        # Touch file if specified
+        if task.touch:
+            task.touch.parent.mkdir(parents=True, exist_ok=True)
+            task.touch.touch()
+
         return True
 
     def run_multiple(self, targets: list[str]) -> bool:
