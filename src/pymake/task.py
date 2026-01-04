@@ -16,6 +16,7 @@ class Task:
     inputs: tuple[Path, ...]
     outputs: tuple[Path, ...]
     run_if: Callable[[], bool] | None = None
+    run_if_not: Callable[[], bool] | None = None
     doc: str | None = None
     touch: Path | None = None
     depends: tuple[str, ...] = ()
@@ -81,6 +82,7 @@ class TaskRegistry:
         inputs: Sequence[str | Path | Callable[[], None]] = (),
         outputs: Sequence[str | Path] = (),
         run_if: Callable[[], bool] | None = None,
+        run_if_not: Callable[[], bool] | None = None,
         touch: str | Path | None = None,
     ) -> Task:
         """Register a task with the given parameters."""
@@ -119,6 +121,7 @@ class TaskRegistry:
             inputs=tuple(input_paths),
             outputs=output_paths,
             run_if=run_if,
+            run_if_not=run_if_not,
             doc=func.__doc__,
             touch=touch_path,
             depends=tuple(task_depends),
@@ -140,13 +143,19 @@ class TaskRegistry:
         inputs: Sequence[str | Path | Callable[[], None]] = (),
         outputs: Sequence[str | Path] = (),
         run_if: Callable[[], bool] | None = None,
+        run_if_not: Callable[[], bool] | None = None,
         touch: str | Path | None = None,
     ) -> Callable[[Callable[[], None]], Callable[[], None]]:
         """Decorator to register a task."""
 
         def decorator(func: Callable[[], None]) -> Callable[[], None]:
             self.register(
-                func, inputs=inputs, outputs=outputs, run_if=run_if, touch=touch
+                func,
+                inputs=inputs,
+                outputs=outputs,
+                run_if=run_if,
+                run_if_not=run_if_not,
+                touch=touch,
             )
             return func
 

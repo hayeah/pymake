@@ -242,6 +242,15 @@ class Executor:
             except Exception as e:
                 raise ExecutionError(task.name, e) from e
 
+        # Check custom run_if_not condition (skip if returns True)
+        if task.run_if_not is not None:
+            try:
+                if task.run_if_not():
+                    self.log(f"[skip] {task.name} (run_if_not returned True)")
+                    return False
+            except Exception as e:
+                raise ExecutionError(task.name, e) from e
+
         # Validate all input files exist before running
         for input_path in task.inputs:
             if not input_path.exists():

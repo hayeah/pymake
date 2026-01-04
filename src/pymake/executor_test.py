@@ -102,6 +102,34 @@ class TestExecutor:
         executor.run("a")
         assert executed == []  # Should skip because run_if returned False
 
+    def test_run_if_not_condition(self) -> None:
+        registry = TaskRegistry()
+        executed = []
+
+        registry.register(
+            lambda: executed.append("a"),
+            name="a",
+            run_if_not=lambda: True,
+        )
+
+        executor = Executor(registry, verbose=False)
+        executor.run("a")
+        assert executed == []  # Should skip because run_if_not returned True
+
+    def test_run_if_not_runs_when_false(self) -> None:
+        registry = TaskRegistry()
+        executed = []
+
+        registry.register(
+            lambda: executed.append("a"),
+            name="a",
+            run_if_not=lambda: False,
+        )
+
+        executor = Executor(registry, verbose=False)
+        executor.run("a")
+        assert executed == ["a"]  # Should run because run_if_not returned False
+
     def test_unknown_target_raises(self) -> None:
         registry = TaskRegistry()
         executor = Executor(registry, verbose=False)
