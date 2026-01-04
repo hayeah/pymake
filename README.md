@@ -83,6 +83,34 @@ for src in Path("src").glob("*.c"):
 
 **Note:** Use default arguments (`s=src, o=obj`) to capture loop variables. Without this, all tasks would reference the final loop values due to Python's closure semantics.
 
+### Default task
+
+Set a default task to run when `pymake` is invoked without arguments:
+
+```python
+task.default("check")
+```
+
+### Meta tasks
+
+Use task functions as inputs to create aggregate tasks:
+
+```python
+@task()
+def lint():
+    sh("ruff check src/")
+
+@task()
+def test():
+    sh("pytest")
+
+@task(inputs=[lint, test])
+def all():
+    pass
+```
+
+Dependency tasks run in order, each following normal run rules.
+
 ## Execution Semantics
 
 A task runs if **any** of these conditions are true (checked in order):

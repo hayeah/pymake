@@ -140,3 +140,19 @@ class TestTaskRegistry:
         registry.register(lambda: None, name="test")
         registry.clear()
         assert registry.get("test") is None
+
+    def test_default_task(self) -> None:
+        registry = TaskRegistry()
+        registry.register(lambda: None, name="build")
+        registry.register(lambda: None, name="all")
+
+        assert registry.get_default() is None
+        registry.default("all")
+        assert registry.get_default() == "all"
+
+    def test_clear_resets_default(self) -> None:
+        registry = TaskRegistry()
+        registry.register(lambda: None, name="all")
+        registry.default("all")
+        registry.clear()
+        assert registry.get_default() is None

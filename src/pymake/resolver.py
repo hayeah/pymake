@@ -21,12 +21,25 @@ class DependencyResolver:
         self.registry = registry
 
     def get_dependencies(self, task: Task) -> list[Task]:
-        """Get immediate task dependencies based on input files."""
+        """Get immediate task dependencies based on input files and depends."""
         deps = []
+        seen = set()
+
+        # Task dependencies (from depends field)
+        for dep_name in task.depends:
+            if dep_name not in seen:
+                dep_task = self.registry.get(dep_name)
+                if dep_task and dep_task.name != task.name:
+                    deps.append(dep_task)
+                    seen.add(dep_name)
+
+        # File-based dependencies
         for input_path in task.inputs:
             dep_task = self.registry.get_by_output(input_path)
-            if dep_task and dep_task.name != task.name:
+            if dep_task and dep_task.name != task.name and dep_task.name not in seen:
                 deps.append(dep_task)
+                seen.add(dep_task.name)
+
         return deps
 
     def resolve(self, target: Task) -> list[Task]:
@@ -113,6 +126,14 @@ class DependencyResolver:
                     lines.append(f'    {file_id} [label="{out_str}" shape=ellipse];')
                 file_id = f"file_{sanitize(out_str)}"
                 lines.append(f"    {task_id} -> {file_id};")
+
+            # Task dependencies (from depends field)
+            for dep_name in task.depends:
+                dep_task = self.registry.get(dep_name)
+                if dep_task:
+                    dep_id = f"task_{sanitize(dep_name)}"
+                    lines.append(f"    {dep_id} -> {task_id};")
+                    visit(dep_task)
 
             # Input files and their producing tasks
             for inp in task.inputs:

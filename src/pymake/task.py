@@ -18,6 +18,7 @@ class Task:
     run_if: Callable[[], bool] | None = None
     doc: str | None = None
     touch: Path | None = None
+    depends: tuple[str, ...] = ()
 
     @property
     def is_phony(self) -> bool:
@@ -59,13 +60,25 @@ class TaskRegistry:
     def __init__(self) -> None:
         self._tasks: dict[str, Task] = {}
         self._output_to_task: dict[Path, str] = {}
+        self._default: str | None = None
+
+    def default(self, name: str | Callable[[], None]) -> None:
+        """Set the default task to run when no target is specified."""
+        if callable(name):
+            self._default = name.__name__
+        else:
+            self._default = name
+
+    def get_default(self) -> str | None:
+        """Get the default task name."""
+        return self._default
 
     def register(
         self,
         func: Callable[[], None],
         *,
         name: str | None = None,
-        inputs: Sequence[str | Path] = (),
+        inputs: Sequence[str | Path | Callable[[], None]] = (),
         outputs: Sequence[str | Path] = (),
         run_if: Callable[[], bool] | None = None,
         touch: str | Path | None = None,
@@ -73,8 +86,15 @@ class TaskRegistry:
         """Register a task with the given parameters."""
         task_name = name or func.__name__
 
-        # Normalize paths
-        input_paths = tuple(Path(p) for p in inputs)
+        # Separate callable inputs (task dependencies) from path inputs
+        input_paths: list[Path] = []
+        task_depends: list[str] = []
+        for inp in inputs:
+            if callable(inp):
+                task_depends.append(inp.__name__)
+            else:
+                input_paths.append(Path(inp))
+
         output_paths = tuple(Path(p) for p in outputs)
         touch_path = Path(touch) if touch else None
 
@@ -96,11 +116,12 @@ class TaskRegistry:
         task = Task(
             name=task_name,
             func=func,
-            inputs=input_paths,
+            inputs=tuple(input_paths),
             outputs=output_paths,
             run_if=run_if,
             doc=func.__doc__,
             touch=touch_path,
+            depends=tuple(task_depends),
         )
 
         if task_name in self._tasks:
@@ -116,7 +137,7 @@ class TaskRegistry:
 
     def __call__(
         self,
-        inputs: Sequence[str | Path] = (),
+        inputs: Sequence[str | Path | Callable[[], None]] = (),
         outputs: Sequence[str | Path] = (),
         run_if: Callable[[], bool] | None = None,
         touch: str | Path | None = None,
@@ -167,6 +188,7 @@ class TaskRegistry:
         """Clear all registered tasks."""
         self._tasks.clear()
         self._output_to_task.clear()
+        self._default = None
 
 
 # Global task registry

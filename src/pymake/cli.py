@@ -55,11 +55,16 @@ def cmd_list(registry: TaskRegistry, all_tasks: bool) -> None:
         else:
             named.append(t)
 
+    default_name = registry.get_default()
+
     if named:
         print("Tasks:")
-        for t in sorted(named, key=lambda x: x.name):
+        # Sort with default task first
+        sorted_named = sorted(named, key=lambda x: (x.name != default_name, x.name))
+        for t in sorted_named:
             doc = f" - {t.doc}" if t.doc else ""
-            print(f"  {t.name}{doc}")
+            default_marker = " (default)" if t.name == default_name else ""
+            print(f"  {t.name}{default_marker}{doc}")
 
     if all_tasks and dynamic:
         print("\nDynamic tasks:")
@@ -269,7 +274,18 @@ def main(argv: list[str] | None = None) -> NoReturn:
         sys.exit(0)
 
     else:
-        # No command - show help
+        # No command - try default task or show help
+        default_target = task.get_default()
+        if default_target:
+            cmd_run(
+                task,
+                [default_target],
+                parallel=parallel,
+                jobs=args.jobs,
+                force=args.force,
+                quiet=args.quiet,
+            )
+            sys.exit(0)
         cmd_help(parser)
         sys.exit(0)
 

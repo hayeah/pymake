@@ -75,3 +75,33 @@ class TestDependencyResolver:
         assert "digraph" in dot
         assert "build" in dot
         assert "out.txt" in dot
+
+    def test_task_dependencies_with_callable_inputs(self) -> None:
+        registry = TaskRegistry()
+
+        def a() -> None:
+            pass
+
+        def b() -> None:
+            pass
+
+        def all_tasks() -> None:
+            pass
+
+        registry.register(a)
+        registry.register(b)
+        registry.register(all_tasks, name="all", inputs=[a, b])
+
+        resolver = DependencyResolver(registry)
+        task = registry.get("all")
+        assert task is not None
+
+        deps = resolver.get_dependencies(task)
+        dep_names = [d.name for d in deps]
+        assert "a" in dep_names
+        assert "b" in dep_names
+
+        order = resolver.resolve(task)
+        names = [t.name for t in order]
+        assert names.index("a") < names.index("all")
+        assert names.index("b") < names.index("all")
