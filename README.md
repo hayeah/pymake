@@ -4,7 +4,21 @@ A Python Makefile alternative with dependency tracking and parallel execution.
 
 ## Installation
 
+### From PyPI
+
 ```bash
+# Run directly without installing
+uvx --from hayeah-pymake pymake --help
+
+# Or install globally
+uv tool install hayeah-pymake
+pymake --help
+```
+
+### Local Development
+
+```bash
+# Editable install for development
 pip install -e .
 ```
 
