@@ -29,4 +29,17 @@ def all():
     pass
 
 
+@task()
+def build():
+    """Build package with uv."""
+    sh("rm -f dist/*.whl dist/*.tar.gz")
+    sh("uv build")
+
+
+@task(inputs=[build])
+def publish():
+    """Publish package to PyPI."""
+    sh('UV_PUBLISH_TOKEN="op://Personal/PyPI/api publish token" op run -- uv publish')
+
+
 task.default(all)
