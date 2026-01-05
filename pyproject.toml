@@ -22,6 +22,11 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 
+[project.urls]
+Homepage = "https://github.com/hayeah/taskpy"
+Repository = "https://github.com/hayeah/taskpy"
+Issues = "https://github.com/hayeah/taskpy/issues"
+
 [project.scripts]
 taskpy = "taskpy.cli:main"
 
