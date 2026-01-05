@@ -22,45 +22,153 @@ pymake --help
 pip install -e .
 ```
 
-## Quick Start
+## Complete Example
 
-Create a `Makefile.py` in your project:
+Here's a typical `Makefile.py` showing common patterns for a data processing pipeline:
 
 ```python
+"""Data processing pipeline with pymake.
+
+Run with: pymake
+List tasks: pymake list
+"""
+
+from pathlib import Path
+
 from pymake import sh, task
 
-@task(outputs=["build/app"])
-def build():
-    sh("gcc -o build/app src/*.c")
+# Configuration
+OUTPUT_DIR = Path("output")
+DATA_DIR = Path("data")
 
-@task(inputs=["build/app"])
+# Output files
+RAW_DATA = OUTPUT_DIR / "raw.json"
+PROCESSED = OUTPUT_DIR / "processed.json"
+STATS = OUTPUT_DIR / "stats.json"
+REPORT = OUTPUT_DIR / "report.html"
+DATABASE = OUTPUT_DIR / "data.db"
+
+
+# Task with outputs only: runs if output is missing
+@task(outputs=[RAW_DATA])
+def fetch():
+    """Download raw data from API."""
+    sh(f"curl -o {RAW_DATA} https://api.example.com/data")
+
+
+# Multiple outputs: both files are produced together
+@task(inputs=[RAW_DATA], outputs=[PROCESSED, STATS])
+def process():
+    """Transform raw data and compute statistics."""
+    sh(f"python scripts/transform.py {RAW_DATA} {PROCESSED} {STATS}")
+
+
+# Depend on one output: still runs process, which produces both PROCESSED and STATS
+@task(inputs=[PROCESSED], outputs=[DATABASE])
+def load_db():
+    """Load processed data into SQLite database."""
+    sh(f"python scripts/load_db.py {PROCESSED} {DATABASE}")
+
+
+# Mix file and task inputs: STATS is a file, load_db is a task
+@task(inputs=[STATS, load_db], outputs=[REPORT])
+def report():
+    """Generate HTML report with statistics."""
+    sh(f"python scripts/report.py {DATABASE} {STATS} {REPORT}")
+
+
+# Meta task: no body, just ensures dependencies run
+@task(inputs=[report])
+def pipeline():
+    """Run full pipeline: fetch → process → load → report."""
+    pass
+
+
+# Phony task: no outputs, so it always runs when invoked
+@task()
+def lint():
+    """Run code linting."""
+    sh("ruff check scripts/")
+
+
+@task()
 def test():
-    sh("./build/app --test")
+    """Run tests."""
+    sh("pytest tests/")
+
+
+@task(inputs=[lint, test])
+def check():
+    """Run all checks (lint + test)."""
+    pass
+
 
 @task()
 def clean():
-    sh("rm -rf build")
+    """Remove all generated files."""
+    sh(f"rm -rf {OUTPUT_DIR}")
+
+
+# Default task: runs when pymake is invoked without arguments
+task.default("pipeline")
 ```
 
 Run tasks:
 
 ```bash
-pymake build      # Run the build task
-pymake test       # Run test (builds first if needed)
-pymake -B build   # Force rebuild
-pymake -p check   # Run in parallel
+pymake                      # Run default task (pipeline)
+pymake check                # Run the check task
+pymake lint test            # Run multiple tasks
+pymake -B fetch             # Force re-run even if up-to-date
+pymake output/report.html   # Run by output file (runs report task)
 ```
+
+List available tasks:
+
+```bash
+$ pymake list
+Tasks:
+  pipeline (default) - Run full pipeline: fetch → process → load → report.
+  check - Run all checks (lint + test).
+  clean - Remove all generated files.
+  fetch - Download raw data from API.
+  lint - Run code linting.
+  load_db - Load processed data into SQLite database.
+  process - Transform raw data and compute statistics.
+  report - Generate HTML report with statistics.
+  test - Run tests.
+```
+
+Trace dependencies for an output file:
+
+```bash
+$ pymake which output/report.html
+output/report.html
+└── report
+    │ ← output/stats.json
+    │ → output/report.html
+    └── load_db
+        │ ← output/processed.json
+        │ → output/data.db
+        └── process
+            │ ← output/raw.json
+            │ → output/processed.json
+            │ → output/stats.json
+            └── fetch
+                  → output/raw.json
+```
+
+Key patterns demonstrated:
+
+- **Configuration at top**: Centralize paths and settings
+- **Explicit I/O**: Declare `inputs` and `outputs` for dependency tracking
+- **Multiple outputs**: A task can produce several files; depending on one runs the whole task
+- **Mixed inputs**: Combine file paths and task functions in `inputs`
+- **Phony tasks**: Omit outputs for tasks that always run (e.g., `lint`, `test`, `clean`)
+- **Meta tasks**: Use task functions as inputs for aggregation (e.g., `pipeline`, `check`)
+- **Default task**: Set with `task.default()` for `pymake` with no arguments
 
 ## Task Definition
-
-### Using the `@task` decorator
-
-```python
-@task(inputs=["src/main.c"], outputs=["build/main.o"])
-def compile():
-    """Compile main.c to object file."""
-    sh("gcc -c src/main.c -o build/main.o")
-```
 
 ### Touch files
 
@@ -97,34 +205,6 @@ for src in Path("src").glob("*.c"):
 
 **Note:** Use default arguments (`s=src, o=obj`) to capture loop variables. Without this, all tasks would reference the final loop values due to Python's closure semantics.
 
-### Default task
-
-Set a default task to run when `pymake` is invoked without arguments:
-
-```python
-task.default("check")
-```
-
-### Meta tasks
-
-Use task functions as inputs to create aggregate tasks:
-
-```python
-@task()
-def lint():
-    sh("ruff check src/")
-
-@task()
-def test():
-    sh("pytest")
-
-@task(inputs=[lint, test])
-def all():
-    pass
-```
-
-Dependency tasks run in order, each following normal run rules.
-
 ## Execution Semantics
 
 A task runs if **any** of these conditions are true (checked in order):
@@ -139,18 +219,6 @@ A task is **skipped** if:
 - All outputs exist AND no inputs are defined (nothing to compare)
 - All outputs exist AND all inputs are older than the oldest output
 - `run_if` callback returns `False` (checked after file conditions)
-
-### Output files
-
-Outputs can be specified via `outputs` or `touch`:
-
-```python
-@task(outputs=["build/app"])      # Explicit output file
-@task(touch="build/.done")        # Touch file (auto-created after task runs)
-@task()                           # Phony - always runs
-```
-
-The `touch` file is automatically created after successful execution and counts as an output.
 
 ### Timestamp comparison
 
@@ -215,6 +283,9 @@ Options:
 Shorthand:
   pymake build       Same as: pymake run build
   pymake build test  Same as: pymake run build test
+
+Examples:
+  pymake graph build | dot -Tpng > deps.png   # Generate dependency graph
 ```
 
 ## Shell Utility
@@ -228,33 +299,6 @@ sh("echo hello")                    # Output to terminal
 output = sh("cat file", capture=True)  # Capture output
 sh("might-fail", check=False)       # Don't raise on error
 ```
-
-## Dependency Graph
-
-Generate a DOT graph for visualization:
-
-```bash
-pymake graph build | dot -Tpng > deps.png
-```
-
-## Reverse Dependency Lookup
-
-Find which task produces an output file and trace its dependencies:
-
-```bash
-$ pymake which final.txt
-final.txt
-└── finalize
-    │ ← derived.txt
-    │ → final.txt
-    └── process
-        │ ← base.txt
-        │ → derived.txt
-        └── generate_base
-              → base.txt
-```
-
-The tree shows inputs (←) and outputs (→) for each task.
 
 ## Error Handling
 

@@ -20,7 +20,7 @@ class DependencyResolver:
     def __init__(self, registry: TaskRegistry) -> None:
         self.registry = registry
 
-    def get_dependencies(self, task: Task) -> list[Task]:
+    def dependencies(self, task: Task) -> list[Task]:
         """Get immediate task dependencies based on input files and depends."""
         deps = []
         seen = set()
@@ -35,12 +35,26 @@ class DependencyResolver:
 
         # File-based dependencies
         for input_path in task.inputs:
-            dep_task = self.registry.get_by_output(input_path)
+            dep_task = self.registry.by_output(input_path)
             if dep_task and dep_task.name != task.name and dep_task.name not in seen:
                 deps.append(dep_task)
                 seen.add(dep_task.name)
 
         return deps
+
+    def transitive_deps(self, task: Task) -> set[str]:
+        """Get all tasks transitively reachable from a task (inclusive)."""
+        result: set[str] = set()
+
+        def visit(t: Task) -> None:
+            if t.name in result:
+                return
+            result.add(t.name)
+            for dep in self.dependencies(t):
+                visit(dep)
+
+        visit(task)
+        return result
 
     def resolve(self, target: Task) -> list[Task]:
         """
@@ -68,7 +82,7 @@ class DependencyResolver:
             stack.append(task.name)
 
             # Visit dependencies first
-            for dep in self.get_dependencies(task):
+            for dep in self.dependencies(task):
                 visit(dep)
 
             stack.pop()
@@ -89,7 +103,7 @@ class DependencyResolver:
                 return
             visited.add(task.name)
 
-            deps = self.get_dependencies(task)
+            deps = self.dependencies(task)
             graph[task.name] = [d.name for d in deps]
 
             for dep in deps:
@@ -146,7 +160,7 @@ class DependencyResolver:
                 lines.append(f"    {file_id} -> {task_id};")
 
                 # Visit producing task
-                dep_task = self.registry.get_by_output(inp)
+                dep_task = self.registry.by_output(inp)
                 if dep_task:
                     visit(dep_task)
 

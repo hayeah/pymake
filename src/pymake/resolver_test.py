@@ -96,7 +96,7 @@ class TestDependencyResolver:
         task = registry.get("all")
         assert task is not None
 
-        deps = resolver.get_dependencies(task)
+        deps = resolver.dependencies(task)
         dep_names = [d.name for d in deps]
         assert "a" in dep_names
         assert "b" in dep_names

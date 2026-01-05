@@ -70,7 +70,7 @@ class TaskRegistry:
         else:
             self._default = name
 
-    def get_default(self) -> str | None:
+    def default_task(self) -> str | None:
         """Get the default task name."""
         return self._default
 
@@ -165,7 +165,7 @@ class TaskRegistry:
         """Get a task by name."""
         return self._tasks.get(name)
 
-    def get_by_output(self, path: str | Path) -> Task | None:
+    def by_output(self, path: str | Path) -> Task | None:
         """Get a task that produces the given output file."""
         resolved = Path(path).resolve()
         task_name = self._output_to_task.get(resolved)
@@ -181,7 +181,7 @@ class TaskRegistry:
             return task
 
         # Then try by output file
-        return self.get_by_output(target)
+        return self.by_output(target)
 
     def all_tasks(self) -> list[Task]:
         """Return all registered tasks."""

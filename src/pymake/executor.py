@@ -115,7 +115,7 @@ class Executor:
             for input_path in task.inputs:
                 if not input_path.exists():
                     # Check if any task produces this file
-                    producing_task = self.registry.get_by_output(input_path)
+                    producing_task = self.registry.by_output(input_path)
                     if not producing_task:
                         raise UnproducibleInputError(task.name, str(input_path))
 
@@ -135,7 +135,7 @@ class Executor:
         # Build a map of task -> set of dependency task names
         task_deps: dict[str, set[str]] = {}
         for task in tasks:
-            deps = self.resolver.get_dependencies(task)
+            deps = self.resolver.dependencies(task)
             task_deps[task.name] = {d.name for d in deps}
 
         # Track completed tasks

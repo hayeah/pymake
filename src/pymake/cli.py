@@ -61,7 +61,7 @@ def cmd_list(registry: TaskRegistry, all_tasks: bool) -> None:
         else:
             named.append(t)
 
-    default_name = registry.get_default()
+    default_name = registry.default_task()
 
     if named:
         print("Tasks:")
@@ -94,35 +94,49 @@ def cmd_graph(registry: TaskRegistry, target: str) -> None:
 def cmd_which(registry: TaskRegistry, output: str) -> None:
     """Show reverse dependency tree for an output file."""
     output_path = Path(output)
-    task = registry.get_by_output(output_path)
+    task = registry.by_output(output_path)
 
     if not task:
         print(f"Error: No task produces '{output}'", file=sys.stderr)
         sys.exit(1)
 
     resolver = DependencyResolver(registry)
+    printed: set[str] = set()
 
     def print_tree(t: Task, prefix: str = "", is_last: bool = True) -> None:
+        if t.name in printed:
+            return
+
+        printed.add(t.name)
         connector = "└── " if is_last else "├── "
         print(f"{prefix}{connector}{t.name}")
 
         child_prefix = prefix + ("    " if is_last else "│   ")
-        deps = resolver.get_dependencies(t)
-        has_deps = len(deps) > 0
+        deps = resolver.dependencies(t)
 
-        # Inputs (←) - no horizontal branch
+        # Filter deps, accounting for what each subtree will cover
+        printable_deps = []
+        covered: set[str] = set()
+        for dep in deps:
+            if dep.name not in printed and dep.name not in covered:
+                printable_deps.append(dep)
+                covered |= resolver.transitive_deps(dep)
+
+        has_deps = len(printable_deps) > 0
+
+        # Inputs (←)
         for inp in t.inputs:
             vert = "│" if has_deps else " "
             print(f"{child_prefix}{vert} ← {inp}")
 
-        # Outputs (→) - no horizontal branch
+        # Outputs (→)
         for out in t.outputs:
             vert = "│" if has_deps else " "
             print(f"{child_prefix}{vert} → {out}")
 
-        # Dependencies (recursive) - with horizontal branch
-        for i, dep in enumerate(deps):
-            print_tree(dep, child_prefix, i == len(deps) - 1)
+        # Dependencies (recursive)
+        for i, dep in enumerate(printable_deps):
+            print_tree(dep, child_prefix, i == len(printable_deps) - 1)
 
     # Print the output file first, then the producing task
     print(output_path)
@@ -338,7 +352,7 @@ def main(argv: list[str] | None = None) -> NoReturn:
 
     else:
         # No command - try default task or show help
-        default_target = task.get_default()
+        default_target = task.default_task()
         if default_target:
             cmd_run(
                 task,
