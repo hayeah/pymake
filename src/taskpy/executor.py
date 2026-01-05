@@ -1,4 +1,4 @@
-"""Task execution engine for pymake."""
+"""Task execution engine for taskpy."""
 
 from __future__ import annotations
 

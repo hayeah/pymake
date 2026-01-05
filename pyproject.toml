@@ -3,14 +3,14 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pymake"
+name = "taskpy"
 version = "0.1.0"
 description = "Python Makefile alternative"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "pymake authors"}
+    {name = "taskpy authors"}
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -23,7 +23,7 @@ classifiers = [
 ]
 
 [project.scripts]
-pymake = "pymake.cli:main"
+taskpy = "taskpy.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -34,7 +34,7 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["pymake*"]
+include = ["taskpy*"]
 
 [tool.mypy]
 python_version = "3.10"

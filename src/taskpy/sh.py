@@ -1,4 +1,4 @@
-"""Shell utilities for pymake."""
+"""Shell utilities for taskpy."""
 
 from __future__ import annotations
 

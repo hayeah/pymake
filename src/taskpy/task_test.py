@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pymake import Task, TaskRegistry
+from taskpy import Task, TaskRegistry
 
 
 class TestTask:

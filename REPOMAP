@@ -1,0 +1,109 @@
+# REPOMAP - taskpy
+
+Python Makefile alternative with dependency tracking and parallel execution.
+
+## Tooling
+
+- Python 3.10+
+- `pip install -e .[dev]` for development
+- `pytest` - tests beside source (`*_test.py`)
+- `mypy` - type checking (strict mode)
+- `ruff` - linting and formatting
+- Self-hosted: `taskpy` runs own `Makefile.py`
+
+## Development Commands
+
+```bash
+taskpy lint        # ruff check
+taskpy typecheck   # mypy
+taskpy format      # ruff format + fix
+taskpy test        # pytest
+taskpy            # runs all (default task)
+```
+
+---
+
+## Task Definition
+
+**Files:** `src/taskpy/task.py`
+
+```python
+from taskpy import task, sh
+
+@task()                                    # phony task (always runs)
+def clean(): sh("rm -rf build")
+
+@task(outputs=["build/app"])               # runs if output missing/stale
+def build(): sh("gcc -o build/app src/*.c")
+
+@task(inputs=["build/app"])                # depends on file (auto-discovers producing task)
+def test(): sh("./build/app --test")
+
+@task(inputs=[build, test])                # depends on tasks (meta task)
+def all(): pass
+
+@task(touch="build/.lint-done")            # touch file as output marker
+def lint(): sh("ruff check src/")
+
+@task(run_if=lambda: os.getenv("CI"))      # conditional execution
+@task(run_if_not=lambda: os.getenv("CI"))  # inverse conditional
+```
+
+Dynamic registration:
+```python
+task.register(func, name="cc:foo.c", inputs=["foo.c"], outputs=["foo.o"])
+task.default(all)  # set default task
+```
+
+**Classes:**
+- `Task` - dataclass: name, func, inputs, outputs, run_if, run_if_not, touch, depends
+- `TaskRegistry` - global `task` instance, handles registration and lookup
+
+---
+
+## Execution
+
+**Files:** `src/taskpy/executor.py`, `src/taskpy/resolver.py`
+
+Task runs if: force flag | phony (no outputs) | output missing | input newer than output
+
+Validation errors:
+- `UnproducibleInputError` - input doesn't exist and no task produces it
+- `MissingInputError` - input missing at execution time
+- `MissingOutputError` - output not created after task runs
+
+**Classes:**
+- `Executor` - runs tasks (sequential/parallel), handles run_if conditions
+- `DependencyResolver` - topological sort, cycle detection, DOT graph generation
+
+---
+
+## CLI
+
+**Files:** `src/taskpy/cli.py`
+
+```bash
+taskpy build              # run target
+taskpy build test         # run multiple targets
+taskpy -B build           # force rerun
+taskpy -p build           # parallel execution
+taskpy -j4 build          # parallel with 4 workers
+taskpy -f other.py build  # custom Makefile
+taskpy list               # list tasks
+taskpy list --all         # include dynamic tasks
+taskpy graph build        # output DOT graph
+```
+
+---
+
+## Shell Utility
+
+**Files:** `src/taskpy/sh.py`
+
+```python
+from taskpy import sh
+
+sh("echo hello")                      # run command, output to terminal
+output = sh("cat file", capture=True) # capture output
+sh("might-fail", check=False)         # don't raise on error
+```

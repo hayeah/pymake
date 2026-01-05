@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from pymake import (
+from taskpy import (
     CyclicDependencyError,
     ExecutionError,
     Executor,

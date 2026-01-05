@@ -1,4 +1,4 @@
-"""pymake - Python Makefile alternative."""
+"""taskpy - Python Makefile alternative."""
 
 from .executor import (
     ExecutionError,

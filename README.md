@@ -1,4 +1,4 @@
-# pymake
+# taskpy
 
 A Python Makefile alternative with dependency tracking and parallel execution.
 
@@ -13,7 +13,7 @@ pip install -e .
 Create a `Makefile.py` in your project:
 
 ```python
-from pymake import sh, task
+from taskpy import sh, task
 
 @task(outputs=["build/app"])
 def build():
@@ -31,10 +31,10 @@ def clean():
 Run tasks:
 
 ```bash
-pymake build      # Run the build task
-pymake test       # Run test (builds first if needed)
-pymake -B build   # Force rebuild
-pymake -p check   # Run in parallel
+taskpy build      # Run the build task
+taskpy test       # Run test (builds first if needed)
+taskpy -B build   # Force rebuild
+taskpy -p check   # Run in parallel
 ```
 
 ## Task Definition
@@ -65,7 +65,7 @@ The touch file is created after the task runs and acts as an output for dependen
 
 ```python
 from pathlib import Path
-from pymake import task
+from taskpy import task
 
 for src in Path("src").glob("*.c"):
     obj = Path("build") / (src.stem + ".o")
@@ -85,7 +85,7 @@ for src in Path("src").glob("*.c"):
 
 ### Default task
 
-Set a default task to run when `pymake` is invoked without arguments:
+Set a default task to run when `taskpy` is invoked without arguments:
 
 ```python
 task.default("check")
@@ -141,18 +141,18 @@ The `touch` file is automatically created after successful execution and counts 
 ### Timestamp comparison
 
 When comparing timestamps:
-- pymake uses the **oldest** output file's mtime
+- taskpy uses the **oldest** output file's mtime
 - If **any** input is newer than this, the task runs
 
 ### Input/Output validation
 
-pymake enforces strict validation of input and output files:
+taskpy enforces strict validation of input and output files:
 
 1. **Before execution**: Each input file must either exist OR have a task that produces it. If neither is true, an error is raised immediately.
 
 2. **At task execution**: All input files must exist when a task runs. If a producing task failed to create its outputs, dependent tasks will error.
 
-3. **After task execution**: All declared output files must exist after the task completes (excluding `touch` files, which are created automatically by pymake).
+3. **After task execution**: All declared output files must exist after the task completes (excluding `touch` files, which are created automatically by taskpy).
 
 ## Custom Conditions
 
@@ -182,7 +182,7 @@ def local_only():
 ## CLI Reference
 
 ```
-pymake [options] [command] [targets...]
+taskpy [options] [command] [targets...]
 
 Commands:
   list [--all]       List tasks with docstrings (--all includes dynamic tasks)
@@ -199,8 +199,8 @@ Options:
   -q, --quiet        Suppress output
 
 Shorthand:
-  pymake build       Same as: pymake run build
-  pymake build test  Same as: pymake run build test
+  taskpy build       Same as: taskpy run build
+  taskpy build test  Same as: taskpy run build test
 ```
 
 ## Shell Utility
@@ -208,7 +208,7 @@ Shorthand:
 The `sh()` function runs shell commands:
 
 ```python
-from pymake import sh
+from taskpy import sh
 
 sh("echo hello")                    # Output to terminal
 output = sh("cat file", capture=True)  # Capture output
@@ -220,7 +220,7 @@ sh("might-fail", check=False)       # Don't raise on error
 Generate a DOT graph for visualization:
 
 ```bash
-pymake graph build | dot -Tpng > deps.png
+taskpy graph build | dot -Tpng > deps.png
 ```
 
 ## Reverse Dependency Lookup
@@ -228,7 +228,7 @@ pymake graph build | dot -Tpng > deps.png
 Find which task produces an output file and trace its dependencies:
 
 ```bash
-$ pymake which final.txt
+$ taskpy which final.txt
 final.txt
 └── finalize
     │ ← derived.txt
