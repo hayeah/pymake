@@ -1,4 +1,4 @@
-"""Task definition and registry for taskpy."""
+"""Task definition and registry for pymake."""
 
 from __future__ import annotations
 

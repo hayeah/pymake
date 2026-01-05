@@ -2,7 +2,7 @@
 
 import pytest
 
-from taskpy import CyclicDependencyError, DependencyResolver, TaskRegistry
+from pymake import CyclicDependencyError, DependencyResolver, TaskRegistry
 
 
 class TestDependencyResolver:

@@ -1,4 +1,4 @@
-"""Command-line interface for taskpy."""
+"""Command-line interface for pymake."""
 
 from __future__ import annotations
 
@@ -210,7 +210,7 @@ def main(argv: list[str] | None = None) -> NoReturn:
     )
 
     parser = argparse.ArgumentParser(
-        prog="taskpy",
+        prog="pymake",
         description="Python Makefile alternative",
     )
     parser.add_argument(

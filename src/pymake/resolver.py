@@ -1,4 +1,4 @@
-"""Dependency resolution with cycle detection for taskpy."""
+"""Dependency resolution with cycle detection for pymake."""
 
 from __future__ import annotations
 

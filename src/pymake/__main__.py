@@ -1,4 +1,4 @@
-"""Entry point for running taskpy as a module."""
+"""Entry point for running pymake as a module."""
 
 from .cli import main
 
