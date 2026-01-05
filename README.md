@@ -110,7 +110,7 @@ def clean():
 
 
 # Default task: runs when pymake is invoked without arguments
-task.default("pipeline")
+task.default(pipeline)
 ```
 
 Run tasks:
