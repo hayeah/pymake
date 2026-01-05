@@ -22,9 +22,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/hayeah/taskpy"
-Repository = "https://github.com/hayeah/taskpy"
-Issues = "https://github.com/hayeah/taskpy/issues"
+Homepage = "https://github.com/hayeah/pymake"
+Repository = "https://github.com/hayeah/pymake"
+Issues = "https://github.com/hayeah/pymake/issues"
 
 [project.scripts]
 pymake = "pymake.cli:main"
