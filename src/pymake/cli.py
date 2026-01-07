@@ -18,6 +18,7 @@ from .executor import (
     MissingOutputError,
     UnproducibleInputError,
 )
+from .doctor import Doctor
 from .resolver import CyclicDependencyError, DependencyResolver
 from .task import Task, task
 
@@ -25,7 +26,7 @@ from .task import Task, task
 class CLI:
     """Command-line interface handler for pymake."""
 
-    SUBCOMMANDS = {"list", "graph", "run", "which", "redo", "help"}
+    SUBCOMMANDS = {"list", "graph", "run", "which", "redo", "doctor", "help"}
 
     def __init__(self, argv: list[str] | None = None) -> None:
         self.argv = argv if argv is not None else sys.argv[1:]
@@ -160,6 +161,16 @@ class CLI:
             help="Only redo target, not its dependents",
         )
 
+        # doctor command
+        doctor_parser = subparsers.add_parser(
+            "doctor", help="Check for dependency issues"
+        )
+        doctor_parser.add_argument(
+            "target",
+            nargs="?",
+            help="Target to check (default: all tasks)",
+        )
+
         # help command
         subparsers.add_parser("help", help="Show help")
 
@@ -240,6 +251,8 @@ class CLI:
             self._cmd_which(self.args.target, self.args.dependents)
         elif command == "redo":
             self._cmd_redo(self.args.target, self.args.only)
+        elif command == "doctor":
+            self._cmd_doctor(self.args.target)
         elif command == "help":
             self._cmd_help()
         else:
@@ -491,6 +504,46 @@ class CLI:
 
             if not any_executed and not self.args.quiet:
                 print("Nothing to do.")
+
+    def _cmd_doctor(self, target: str | None) -> None:
+        """Check for dependency issues."""
+        console = Console()
+
+        # Find target task if specified
+        target_task = None
+        if target:
+            target_task = self.registry.find_target(target)
+            if not target_task:
+                print(f"Error: Unknown target: {target}", file=sys.stderr)
+                sys.exit(1)
+
+        doctor = Doctor(self.registry)
+        issues = doctor.check_all(target_task)
+
+        if not issues:
+            console.print("[green]No issues found.[/green]")
+            return
+
+        # Group by severity
+        errors = [i for i in issues if i.severity == "error"]
+        warnings = [i for i in issues if i.severity == "warning"]
+
+        for issue in errors:
+            console.print(f"[red]error[/red]: {issue.task}: {issue.message}")
+
+        for issue in warnings:
+            console.print(f"[yellow]warning[/yellow]: {issue.task}: {issue.message}")
+
+        console.print()
+        if errors:
+            console.print(f"[red]{len(errors)} error(s)[/red]", end="")
+            if warnings:
+                console.print(f", [yellow]{len(warnings)} warning(s)[/yellow]")
+            else:
+                console.print()
+            sys.exit(1)
+        else:
+            console.print(f"[yellow]{len(warnings)} warning(s)[/yellow]")
 
     def _cmd_help(self) -> None:
         """Show help."""

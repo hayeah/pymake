@@ -272,6 +272,7 @@ Commands:
   graph <target>     Output DOT graph of dependencies
   which <target>     Show dependency tree for a task or output file
   redo <target>      Force re-run a target and its dependents
+  doctor [target]    Check for dependency issues
   run <targets>      Run specified targets
   help               Show help
 
@@ -317,6 +318,17 @@ pymake redo --only fetch     # Re-run only fetch, not its dependents
 
 Options:
 - `--only`: Only redo the target task, not its dependents. Warns if the task was skipped due to a `run_if` condition.
+
+### doctor command
+
+Check for dependency issues without running any tasks. Reports all problems found.
+
+```bash
+pymake doctor              # Check all tasks
+pymake doctor build        # Check only tasks needed for 'build'
+```
+
+Reports cyclic dependencies and inputs that don't exist and no task produces.
 
 ## Shell Utility
 
