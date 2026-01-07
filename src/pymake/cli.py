@@ -8,6 +8,9 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
+from rich.console import Console
+from rich.tree import Tree
+
 from .executor import (
     ExecutionError,
     Executor,
@@ -16,13 +19,13 @@ from .executor import (
     UnproducibleInputError,
 )
 from .resolver import CyclicDependencyError, DependencyResolver
-from .task import Task, TaskRegistry, task
+from .task import Task, task
 
 
 class CLI:
     """Command-line interface handler for pymake."""
 
-    SUBCOMMANDS = {"list", "graph", "run", "which", "help"}
+    SUBCOMMANDS = {"list", "graph", "run", "which", "redo", "help"}
 
     def __init__(self, argv: list[str] | None = None) -> None:
         self.argv = argv if argv is not None else sys.argv[1:]
@@ -38,17 +41,29 @@ class CLI:
 
     def run(self) -> NoReturn:
         """Main entry point - parse args and dispatch to appropriate command."""
-        if self._is_target_mode():
-            self._run_target_mode()
-        else:
-            self._run_subcommand_mode()
+        try:
+            if self._is_target_mode():
+                self._run_target_mode()
+            else:
+                self._run_subcommand_mode()
+        except (
+            CyclicDependencyError,
+            UnproducibleInputError,
+            MissingInputError,
+            MissingOutputError,
+            ExecutionError,
+            ValueError,
+        ) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
 
     def _is_target_mode(self) -> bool:
         """Check if first positional arg is a target (not a subcommand)."""
         for i, arg in enumerate(self.argv):
             if not arg.startswith("-"):
                 # Skip value for options that take arguments
-                if i > 0 and self.argv[i - 1] in ("-f", "--file", "-C", "--directory", "-j", "--jobs"):
+                prev = self.argv[i - 1] if i > 0 else ""
+                if prev in ("-f", "--file", "-C", "--directory", "-j", "--jobs"):
                     continue
                 return arg not in self.SUBCOMMANDS
         return False
@@ -124,9 +139,26 @@ class CLI:
 
         # which command
         which_parser = subparsers.add_parser(
-            "which", help="Show reverse dependency tree for an output"
+            "which", help="Show dependency tree for a task or output"
         )
-        which_parser.add_argument("output", help="Output file to trace")
+        which_parser.add_argument("target", help="Task name or output file to trace")
+        which_parser.add_argument(
+            "-d",
+            "--dependents",
+            action="store_true",
+            help="Show tasks that depend on this target instead of its dependencies",
+        )
+
+        # redo command
+        redo_parser = subparsers.add_parser(
+            "redo", help="Force re-run a target and its dependents"
+        )
+        redo_parser.add_argument("target", help="Task name or output file to redo")
+        redo_parser.add_argument(
+            "--only",
+            action="store_true",
+            help="Only redo target, not its dependents",
+        )
 
         # help command
         subparsers.add_parser("help", help="Show help")
@@ -138,7 +170,8 @@ class CLI:
             try:
                 os.chdir(self.args.directory)
             except OSError as e:
-                print(f"Error: Cannot change to directory '{self.args.directory}': {e}", file=sys.stderr)
+                msg = f"Error: Cannot change to directory '{self.args.directory}': {e}"
+                print(msg, file=sys.stderr)
                 sys.exit(1)
 
     def _load_makefile(self) -> None:
@@ -204,7 +237,9 @@ class CLI:
         elif command == "run":
             self._cmd_run(self.args.targets)
         elif command == "which":
-            self._cmd_which(self.args.output)
+            self._cmd_which(self.args.target, self.args.dependents)
+        elif command == "redo":
+            self._cmd_redo(self.args.target, self.args.only)
         elif command == "help":
             self._cmd_help()
         else:
@@ -264,30 +299,71 @@ class CLI:
         dot = resolver.to_dot(found_task)
         print(dot)
 
-    def _cmd_which(self, output: str) -> None:
-        """Show reverse dependency tree for an output file."""
-        output_path = Path(output)
-        found_task = self.registry.by_output(output_path)
+    def _cmd_which(self, target: str, show_dependents: bool) -> None:
+        """Show dependency tree for a task or output file."""
+        console = Console()
+
+        # Find task by name or output file
+        found_task = self.registry.find_target(target)
 
         if not found_task:
-            print(f"Error: No task produces '{output}'", file=sys.stderr)
+            print(f"Error: Unknown target: {target}", file=sys.stderr)
             sys.exit(1)
 
         resolver = DependencyResolver(self.registry)
         printed: set[str] = set()
 
-        def print_tree(t: Task, prefix: str = "", is_last: bool = True) -> None:
+        def task_label(t: Task) -> str:
+            """Format task name, red with (*) if it would run."""
+            if t.should_run():
+                return f"[red]{t.name}[/red] (*)"
+            return t.name
+
+        def add_subtree(parent: Tree, t: Task) -> None:
             if t.name in printed:
                 return
 
             printed.add(t.name)
-            connector = "└── " if is_last else "├── "
-            print(f"{prefix}{connector}{t.name}")
 
-            child_prefix = prefix + ("    " if is_last else "│   ")
-            deps = resolver.dependencies(t)
+            # Create node for this task
+            node = parent.add(task_label(t))
 
-            # Filter deps, accounting for what each subtree will cover
+            if show_dependents:
+                # Show tasks that depend on this one
+                deps = resolver.dependents(t)
+                # Filter out already-printed deps
+                printable_deps = [d for d in deps if d.name not in printed]
+            else:
+                # Show dependencies (what this task depends on)
+                deps = resolver.dependencies(t)
+                # Filter deps, accounting for what each subtree will cover
+                printable_deps = []
+                covered: set[str] = set()
+                for dep in deps:
+                    if dep.name not in printed and dep.name not in covered:
+                        printable_deps.append(dep)
+                        covered |= resolver.transitive_deps(dep)
+
+            # Show inputs (←) and outputs (→)
+            for inp in t.inputs:
+                node.add(f"[dim]← {inp}[/dim]")
+            for out in t.outputs:
+                node.add(f"[dim]→ {out}[/dim]")
+
+            # Recurse into children
+            for dep in printable_deps:
+                add_subtree(node, dep)
+
+        # Build the tree starting from the target
+        tree = Tree(task_label(found_task))
+
+        if show_dependents:
+            # Show tasks that depend on target
+            deps = resolver.dependents(found_task)
+            printable_deps = [d for d in deps if d.name not in printed]
+        else:
+            # Show dependencies
+            deps = resolver.dependencies(found_task)
             printable_deps = []
             covered: set[str] = set()
             for dep in deps:
@@ -295,25 +371,19 @@ class CLI:
                     printable_deps.append(dep)
                     covered |= resolver.transitive_deps(dep)
 
-            has_deps = len(printable_deps) > 0
+        # Add inputs/outputs to root
+        for inp in found_task.inputs:
+            tree.add(f"[dim]← {inp}[/dim]")
+        for out in found_task.outputs:
+            tree.add(f"[dim]→ {out}[/dim]")
 
-            # Inputs (←)
-            for inp in t.inputs:
-                vert = "│" if has_deps else " "
-                print(f"{child_prefix}{vert} ← {inp}")
+        printed.add(found_task.name)
 
-            # Outputs (→)
-            for out in t.outputs:
-                vert = "│" if has_deps else " "
-                print(f"{child_prefix}{vert} → {out}")
+        # Add subtrees for dependencies/dependents
+        for dep in printable_deps:
+            add_subtree(tree, dep)
 
-            # Dependencies (recursive)
-            for i, dep in enumerate(printable_deps):
-                print_tree(dep, child_prefix, i == len(printable_deps) - 1)
-
-        # Print the output file first, then the producing task
-        print(output_path)
-        print_tree(found_task)
+        console.print(tree)
 
     def _cmd_run(self, targets: list[str]) -> None:
         """Run specified targets."""
@@ -331,25 +401,96 @@ class CLI:
             verbose=not self.args.quiet,
         )
 
-        try:
+        any_executed = False
+        for target in targets:
+            if executor.run(target):
+                any_executed = True
+
+        if not any_executed and not self.args.quiet:
+            print("Nothing to do (all targets up to date).")
+
+    def _cmd_redo(self, target: str, only: bool) -> None:
+        """Force re-run a target and optionally its dependents."""
+        assert self.args is not None
+
+        found_task = self.registry.find_target(target)
+        if not found_task:
+            print(f"Error: Unknown target: {target}", file=sys.stderr)
+            sys.exit(1)
+
+        resolver = DependencyResolver(self.registry)
+
+        if only:
+            # Only redo this one task
+            executor = Executor(
+                self.registry,
+                parallel=False,
+                force=True,
+                verbose=not self.args.quiet,
+            )
+            # First, run dependencies (not forced) so inputs are ready
+            deps = resolver.resolve(found_task)
+            for dep in deps:
+                if dep.name != found_task.name:
+                    executor.force = False
+                    executor._execute_task(dep)
+
+            # Then force-run the target
+            executor.force = True
+            executed = executor._execute_task(found_task)
+            if not executed and not self.args.quiet:
+                print(f"Warning: {found_task.name} was skipped (run_if condition).")
+        else:
+            # Redo target and all dependents
+            # Get all tasks that transitively depend on this one
+            dependent_names = resolver.transitive_dependents(found_task)
+
+            # Build execution order: first the target's dependencies, then target,
+            # then all dependents in topological order
+            tasks_to_run: list[Task] = []
+            seen: set[str] = set()
+
+            # Add the target and its dependencies first
+            target_deps = resolver.resolve(found_task)
+            for t in target_deps:
+                if t.name not in seen:
+                    tasks_to_run.append(t)
+                    seen.add(t.name)
+
+            # Then add all dependents (we need to resolve each one to get proper order)
+            for dep_name in dependent_names:
+                if dep_name not in seen:
+                    dep_task = self.registry.get(dep_name)
+                    if dep_task:
+                        tasks_to_run.append(dep_task)
+                        seen.add(dep_name)
+
+            executor = Executor(
+                self.registry,
+                parallel=self.parallel,
+                max_workers=self.args.jobs,
+                force=False,  # We'll selectively force
+                verbose=not self.args.quiet,
+            )
+
             any_executed = False
-            for target in targets:
-                if executor.run(target):
-                    any_executed = True
+            for t in tasks_to_run:
+                # Force tasks that are the target or its dependents
+                force_this = t.name in dependent_names
+                if force_this:
+                    # Temporarily set force for this task
+                    old_force = executor.force
+                    executor.force = True
+                    if executor._execute_task(t):
+                        any_executed = True
+                    executor.force = old_force
+                else:
+                    # Run normally (dependencies of target)
+                    if executor._execute_task(t):
+                        any_executed = True
 
             if not any_executed and not self.args.quiet:
-                print("Nothing to do (all targets up to date).")
-
-        except (
-            CyclicDependencyError,
-            UnproducibleInputError,
-            MissingInputError,
-            MissingOutputError,
-            ExecutionError,
-            ValueError,
-        ) as e:
-            print(f"Error: {e}", file=sys.stderr)
-            sys.exit(1)
+                print("Nothing to do.")
 
     def _cmd_help(self) -> None:
         """Show help."""

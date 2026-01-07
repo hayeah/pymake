@@ -8,6 +8,9 @@ version = "0.1.2"
 description = "Python Makefile alternative"
 readme = "README.md"
 requires-python = ">=3.10"
+dependencies = [
+    "rich",
+]
 license = "MIT"
 authors = [
     {name = "Howard Yeh"}

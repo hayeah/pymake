@@ -139,24 +139,25 @@ Tasks:
   test - Run tests.
 ```
 
-Trace dependencies for an output file:
+Trace dependencies for a task:
 
 ```bash
-$ pymake which output/report.html
-output/report.html
-└── report
-    │ ← output/stats.json
-    │ → output/report.html
-    └── load_db
-        │ ← output/processed.json
-        │ → output/data.db
-        └── process
-            │ ← output/raw.json
-            │ → output/processed.json
-            │ → output/stats.json
-            └── fetch
-                  → output/raw.json
+$ pymake which report
+report
+├── ← output/stats.json
+├── → output/report.html
+└── load_db
+    ├── ← output/processed.json
+    ├── → output/data.db
+    └── process
+        ├── ← output/raw.json
+        ├── → output/processed.json
+        ├── → output/stats.json
+        └── fetch
+            └── → output/raw.json
 ```
+
+Tasks that would rerun (based on timestamps) are shown in red with `(*)` marker.
 
 Key patterns demonstrated:
 
@@ -269,7 +270,8 @@ pymake [options] [command] [targets...]
 Commands:
   list [--all]       List tasks with docstrings (--all includes dynamic tasks)
   graph <target>     Output DOT graph of dependencies
-  which <output>     Show reverse dependency tree for an output file
+  which <target>     Show dependency tree for a task or output file
+  redo <target>      Force re-run a target and its dependents
   run <targets>      Run specified targets
   help               Show help
 
@@ -290,6 +292,31 @@ Examples:
   pymake -f custom.py build       # Use custom.py instead of Makefile.py
   pymake graph build | dot -Tpng > deps.png   # Generate dependency graph
 ```
+
+### which command
+
+Show the dependency tree for a task or output file. Tasks that would rerun are shown in red.
+
+```bash
+pymake which fetch           # Show dependencies of the 'fetch' task
+pymake which output/raw.json # Show dependencies by output file
+pymake which -d fetch        # Show tasks that depend on 'fetch' (--dependents)
+```
+
+Options:
+- `-d, --dependents`: Show tasks that depend on the target instead of its dependencies
+
+### redo command
+
+Force re-run a target task. By default, also re-runs all tasks that depend on it.
+
+```bash
+pymake redo fetch            # Re-run fetch and all tasks that depend on it
+pymake redo --only fetch     # Re-run only fetch, not its dependents
+```
+
+Options:
+- `--only`: Only redo the target task, not its dependents. Warns if the task was skipped due to a `run_if` condition.
 
 ## Shell Utility
 

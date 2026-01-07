@@ -105,3 +105,71 @@ class TestDependencyResolver:
         names = [t.name for t in order]
         assert names.index("a") < names.index("all")
         assert names.index("b") < names.index("all")
+
+    def test_dependents_simple(self) -> None:
+        """Test finding immediate dependents of a task."""
+        registry = TaskRegistry()
+        registry.register(lambda: None, name="a", outputs=["a.txt"])
+        registry.register(lambda: None, name="b", inputs=["a.txt"])
+        registry.register(lambda: None, name="c", inputs=["a.txt"])
+
+        resolver = DependencyResolver(registry)
+        task_a = registry.get("a")
+        assert task_a is not None
+
+        dependents = resolver.dependents(task_a)
+        dep_names = {d.name for d in dependents}
+        assert dep_names == {"b", "c"}
+
+    def test_dependents_with_no_dependents(self) -> None:
+        """Test dependents on a leaf task (no dependents)."""
+        registry = TaskRegistry()
+        registry.register(lambda: None, name="a", outputs=["a.txt"])
+        registry.register(lambda: None, name="b", inputs=["a.txt"])
+
+        resolver = DependencyResolver(registry)
+        task_b = registry.get("b")
+        assert task_b is not None
+
+        dependents = resolver.dependents(task_b)
+        assert dependents == []
+
+    def test_transitive_dependents(self) -> None:
+        """Test finding all tasks that transitively depend on a task."""
+        registry = TaskRegistry()
+        registry.register(lambda: None, name="a", outputs=["a.txt"])
+        registry.register(lambda: None, name="b", inputs=["a.txt"], outputs=["b.txt"])
+        registry.register(lambda: None, name="c", inputs=["b.txt"], outputs=["c.txt"])
+        registry.register(lambda: None, name="d", inputs=["c.txt"])
+
+        resolver = DependencyResolver(registry)
+        task_a = registry.get("a")
+        assert task_a is not None
+
+        trans_deps = resolver.transitive_dependents(task_a)
+        # Should include a itself, b, c, and d
+        assert trans_deps == {"a", "b", "c", "d"}
+
+    def test_transitive_dependents_diamond(self) -> None:
+        """Test transitive dependents with diamond shape."""
+        registry = TaskRegistry()
+        registry.register(lambda: None, name="a", outputs=["a.txt"])
+        registry.register(lambda: None, name="b", inputs=["a.txt"], outputs=["b.txt"])
+        registry.register(lambda: None, name="c", inputs=["a.txt"], outputs=["c.txt"])
+        registry.register(
+            lambda: None, name="d", inputs=["b.txt", "c.txt"], outputs=["d.txt"]
+        )
+
+        resolver = DependencyResolver(registry)
+        task_a = registry.get("a")
+        assert task_a is not None
+
+        trans_deps = resolver.transitive_dependents(task_a)
+        # a affects b, c, and d
+        assert trans_deps == {"a", "b", "c", "d"}
+
+        # b only affects d
+        task_b = registry.get("b")
+        assert task_b is not None
+        trans_deps_b = resolver.transitive_dependents(task_b)
+        assert trans_deps_b == {"b", "d"}

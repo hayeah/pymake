@@ -56,6 +56,43 @@ class DependencyResolver:
         visit(task)
         return result
 
+    def dependents(self, task: Task) -> list[Task]:
+        """Get immediate tasks that depend on this task.
+
+        Returns all tasks that list this task in their dependencies
+        (either via Task.depends or by consuming outputs).
+        """
+        dependents: list[Task] = []
+        seen: set[str] = set()
+
+        for candidate in self.registry.all_tasks():
+            if candidate.name == task.name:
+                continue
+
+            # Check if candidate depends on this task
+            deps = self.dependencies(candidate)
+            dep_names = {d.name for d in deps}
+
+            if task.name in dep_names and candidate.name not in seen:
+                dependents.append(candidate)
+                seen.add(candidate.name)
+
+        return dependents
+
+    def transitive_dependents(self, task: Task) -> set[str]:
+        """Get all tasks that transitively depend on this task (inclusive)."""
+        result: set[str] = set()
+
+        def visit(t: Task) -> None:
+            if t.name in result:
+                return
+            result.add(t.name)
+            for dependent in self.dependents(t):
+                visit(dependent)
+
+        visit(task)
+        return result
+
     def resolve(self, target: Task) -> list[Task]:
         """
         Resolve all dependencies for a target task.
