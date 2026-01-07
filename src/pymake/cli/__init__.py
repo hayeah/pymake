@@ -45,13 +45,22 @@ class CLI:
     def run(self) -> NoReturn:
         """Main entry point - parse args and dispatch to appropriate command."""
         try:
-            if self._is_target_mode():
+            if self._is_force_subcommand_mode():
+                self._run_subcommand_mode()
+            elif self._is_target_mode():
                 self._run_target_mode()
             else:
                 self._run_subcommand_mode()
         except (MissingOutputError, ExecutionError, ValueError) as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
+
+    def _is_force_subcommand_mode(self) -> bool:
+        """Check if -- is the first arg to force subcommand mode."""
+        if self.argv and self.argv[0] == "--":
+            self.argv = self.argv[1:]
+            return True
+        return False
 
     def _is_target_mode(self) -> bool:
         """Check if first positional arg is a target (not a subcommand)."""

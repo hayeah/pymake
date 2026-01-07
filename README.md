@@ -282,10 +282,15 @@ Shorthand:
   pymake build       Same as: pymake run build
   pymake build test  Same as: pymake run build test
 
+Force subcommand mode:
+  pymake -- <command> [options]   Always run as subcommand (-- must be first)
+
 Examples:
   pymake -C subproject build      # Run build in subproject directory
   pymake -f custom.py build       # Use custom.py instead of Makefile.py
   pymake graph build | dot -Tpng > deps.png   # Generate dependency graph
+  pymake -- list                  # Force 'list' subcommand even if 'list' task exists
+  pymake -- -f other.py list      # Force subcommand mode with options after --
 ```
 
 ### which command
