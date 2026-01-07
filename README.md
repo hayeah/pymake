@@ -103,12 +103,6 @@ def check():
     pass
 
 
-@task()
-def clean():
-    """Remove all generated files."""
-    sh(f"rm -rf {OUTPUT_DIR}")
-
-
 # Default task: runs when pymake is invoked without arguments
 task.default(pipeline)
 ```
@@ -130,7 +124,6 @@ $ pymake list
 Tasks:
   pipeline (default) - Run full pipeline: fetch → process → load → report.
   check - Run all checks (lint + test).
-  clean - Remove all generated files.
   fetch - Download raw data from API.
   lint - Run code linting.
   load_db - Load processed data into SQLite database.
@@ -165,7 +158,7 @@ Key patterns demonstrated:
 - **Explicit I/O**: Declare `inputs` and `outputs` for dependency tracking
 - **Multiple outputs**: A task can produce several files; depending on one runs the whole task
 - **Mixed inputs**: Combine file paths and task functions in `inputs`
-- **Phony tasks**: Omit outputs for tasks that always run (e.g., `lint`, `test`, `clean`)
+- **Phony tasks**: Omit outputs for tasks that always run (e.g., `lint`, `test`)
 - **Meta tasks**: Use task functions as inputs for aggregation (e.g., `pipeline`, `check`)
 - **Default task**: Set with `task.default()` for `pymake` with no arguments
 
@@ -273,6 +266,7 @@ Commands:
   which <target>     Show dependency tree for a task or output file
   redo <target>      Force re-run a target and its dependents
   doctor [target]    Check for dependency issues
+  clean [target]     Clean output files of tasks
   run <targets>      Run specified targets
   help               Show help
 
@@ -329,6 +323,26 @@ pymake doctor build        # Check only tasks needed for 'build'
 ```
 
 Reports cyclic dependencies and inputs that don't exist and no task produces.
+
+### clean command
+
+Remove output files produced by tasks. Use this instead of writing custom clean tasks.
+
+```bash
+pymake clean fetch              # Clean output files of 'fetch' task
+pymake clean --up report        # Clean report and all upstream dependencies
+pymake clean --down fetch       # Clean fetch and all downstream dependents
+pymake clean --all              # Clean all known output files
+pymake clean --dry --all        # Dry run: show what would be deleted
+```
+
+Options:
+- `--up`: Also clean output files of dependencies (upstream tasks)
+- `--down`: Also clean output files of dependents (downstream tasks)
+- `--all`: Clean all known output files from all tasks
+- `--dry`: Show what would be deleted without actually deleting
+
+**Note for AI assistants:** Do not create custom clean tasks in Makefile.py. Use the built-in `pymake clean` command instead.
 
 ## Shell Utility
 

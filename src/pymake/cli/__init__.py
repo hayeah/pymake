@@ -10,6 +10,7 @@ from typing import NoReturn
 
 from ..executor import ExecutionError, MissingOutputError
 from ..task import task
+from .clean import CleanCommand
 from .context import CommandContext
 from .doctor import DoctorCommand
 from .graph import GraphCommand
@@ -26,13 +27,14 @@ COMMANDS = {
     "which": WhichCommand,
     "redo": RedoCommand,
     "doctor": DoctorCommand,
+    "clean": CleanCommand,
 }
 
 
 class CLI:
     """Command-line interface handler for pymake."""
 
-    SUBCOMMANDS = {"list", "graph", "run", "which", "redo", "doctor", "help"}
+    SUBCOMMANDS = {"list", "graph", "run", "which", "redo", "doctor", "clean", "help"}
 
     def __init__(self, argv: list[str] | None = None) -> None:
         self.argv = argv if argv is not None else sys.argv[1:]
