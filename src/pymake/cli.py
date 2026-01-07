@@ -11,15 +11,9 @@ from typing import NoReturn
 from rich.console import Console
 from rich.tree import Tree
 
-from .executor import (
-    ExecutionError,
-    Executor,
-    MissingInputError,
-    MissingOutputError,
-    UnproducibleInputError,
-)
 from .doctor import Doctor
-from .resolver import CyclicDependencyError, DependencyResolver
+from .executor import ExecutionError, Executor, MissingOutputError
+from .resolver import DependencyResolver
 from .task import Task, task
 
 
@@ -47,14 +41,7 @@ class CLI:
                 self._run_target_mode()
             else:
                 self._run_subcommand_mode()
-        except (
-            CyclicDependencyError,
-            UnproducibleInputError,
-            MissingInputError,
-            MissingOutputError,
-            ExecutionError,
-            ValueError,
-        ) as e:
+        except (MissingOutputError, ExecutionError, ValueError) as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
 
@@ -301,6 +288,17 @@ class CLI:
                 doc = f" - {t.doc}" if t.doc else ""
                 print(f"  {t.name}{doc}")
 
+    def _check_before_run(self, target: Task) -> None:
+        """Run doctor check before execution. Exit if issues found."""
+        doctor = Doctor(self.registry)
+        issues = doctor.check_all(target)
+        if issues:
+            console = Console()
+            for issue in issues:
+                console.print(f"[red]error[/red]: {issue.task}: {issue.message}")
+            console.print(f"\n[red]{len(issues)} error(s)[/red]")
+            sys.exit(1)
+
     def _cmd_graph(self, target: str) -> None:
         """Generate a DOT graph for a target."""
         found_task = self.registry.find_target(target)
@@ -406,6 +404,18 @@ class CLI:
             print("Error: No targets specified", file=sys.stderr)
             sys.exit(1)
 
+        # Find all target tasks and run doctor check
+        target_tasks: list[Task] = []
+        for target in targets:
+            found = self.registry.find_target(target)
+            if not found:
+                print(f"Error: Unknown target: {target}", file=sys.stderr)
+                sys.exit(1)
+            target_tasks.append(found)
+
+        for t in target_tasks:
+            self._check_before_run(t)
+
         executor = Executor(
             self.registry,
             parallel=self.parallel,
@@ -415,8 +425,8 @@ class CLI:
         )
 
         any_executed = False
-        for target in targets:
-            if executor.run(target):
+        for t in target_tasks:
+            if executor.run(t):
                 any_executed = True
 
         if not any_executed and not self.args.quiet:
@@ -431,6 +441,7 @@ class CLI:
             print(f"Error: Unknown target: {target}", file=sys.stderr)
             sys.exit(1)
 
+        self._check_before_run(found_task)
         resolver = DependencyResolver(self.registry)
 
         if only:
