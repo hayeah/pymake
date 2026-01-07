@@ -275,6 +275,7 @@ Commands:
 
 Options:
   -f, --file FILE    Makefile path (default: Makefile.py)
+  -C, --directory DIR  Change to DIR before doing anything
   -p, --parallel     Enable parallel execution
   -j, --jobs N       Number of parallel workers
   -B, --force        Force rerun all tasks
@@ -285,6 +286,8 @@ Shorthand:
   pymake build test  Same as: pymake run build test
 
 Examples:
+  pymake -C subproject build      # Run build in subproject directory
+  pymake -f custom.py build       # Use custom.py instead of Makefile.py
   pymake graph build | dot -Tpng > deps.png   # Generate dependency graph
 ```
 

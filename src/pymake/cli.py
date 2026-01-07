@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import NoReturn
@@ -47,7 +48,7 @@ class CLI:
         for i, arg in enumerate(self.argv):
             if not arg.startswith("-"):
                 # Skip value for options that take arguments
-                if i > 0 and self.argv[i - 1] in ("-f", "--file", "-j", "--jobs"):
+                if i > 0 and self.argv[i - 1] in ("-f", "--file", "-C", "--directory", "-j", "--jobs"):
                     continue
                 return arg not in self.SUBCOMMANDS
         return False
@@ -63,6 +64,12 @@ class CLI:
             "--file",
             default="Makefile.py",
             help="Path to Makefile.py (default: Makefile.py)",
+        )
+        parser.add_argument(
+            "-C",
+            "--directory",
+            default=None,
+            help="Change to directory before doing anything",
         )
         parser.add_argument(
             "-j",
@@ -124,6 +131,16 @@ class CLI:
         # help command
         subparsers.add_parser("help", help="Show help")
 
+    def _change_directory(self) -> None:
+        """Change to the specified directory if -C was given."""
+        assert self.args is not None
+        if self.args.directory:
+            try:
+                os.chdir(self.args.directory)
+            except OSError as e:
+                print(f"Error: Cannot change to directory '{self.args.directory}': {e}", file=sys.stderr)
+                sys.exit(1)
+
     def _load_makefile(self) -> None:
         """Load and execute the Makefile.py."""
         assert self.args is not None
@@ -156,6 +173,7 @@ class CLI:
         self.parser.add_argument("targets", nargs="+", help="Targets to run")
         self.args = self.parser.parse_args(self.argv)
 
+        self._change_directory()
         self.registry.clear()
         self._load_makefile()
         self._cmd_run(self.args.targets)
@@ -167,6 +185,7 @@ class CLI:
         self._add_subparsers(self.parser)
         self.args = self.parser.parse_args(self.argv)
 
+        self._change_directory()
         self.registry.clear()
         self._load_makefile()
         self._dispatch_command()
