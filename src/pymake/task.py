@@ -183,6 +183,13 @@ class TaskRegistry:
         # Then try by output file
         return self.by_output(target)
 
+    def find_target_or_raise(self, target: str) -> Task:
+        """Find a task by name or output file, raising ValueError if not found."""
+        task = self.find_target(target)
+        if not task:
+            raise ValueError(f"Unknown target: {target}")
+        return task
+
     def all_tasks(self) -> list[Task]:
         """Return all registered tasks."""
         return list(self._tasks.values())
