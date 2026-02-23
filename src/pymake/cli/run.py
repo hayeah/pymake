@@ -40,6 +40,7 @@ class RunCommand:
 
         executor = Executor(
             self.ctx.registry,
+            vars_resolver=self.ctx.vars_resolver,
             parallel=self.ctx.parallel,
             max_workers=self.ctx.args.jobs,
             force=self.ctx.args.force,

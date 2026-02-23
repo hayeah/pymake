@@ -9,6 +9,7 @@ from typing import TextIO
 
 from .resolver import CyclicDependencyError, DependencyResolver
 from .task import Task, TaskRegistry
+from .vars import VarsResolver
 
 
 class ExecutionError(Exception):
@@ -61,6 +62,7 @@ class Executor:
         self,
         registry: TaskRegistry,
         *,
+        vars_resolver: VarsResolver | None = None,
         parallel: bool = False,
         max_workers: int | None = None,
         force: bool = False,
@@ -74,6 +76,8 @@ class Executor:
         self.force = force
         self.verbose = verbose
         self.output = output or sys.stdout
+        self.vars_resolver = vars_resolver or VarsResolver()
+        self._vars_validated = False
         self._lock = threading.Lock()
 
     def log(self, message: str) -> None:
@@ -94,6 +98,8 @@ class Executor:
                 raise ValueError(f"Unknown target: {target}")
         else:
             task = target
+
+        self._validate_vars_once()
 
         # Resolve dependencies
         try:
@@ -228,6 +234,8 @@ class Executor:
 
         Returns True if the task was executed.
         """
+        self._validate_vars_once()
+
         # Check if task should run based on file timestamps
         if not task.should_run(self.force):
             self.log(f"[skip] {task.name} (up to date)")
@@ -259,7 +267,8 @@ class Executor:
         # Execute the task
         self.log(f"[run] {task.name}")
         try:
-            task.func()
+            kwargs = self.vars_resolver.resolve(task)
+            task.func(**kwargs)
         except Exception as e:
             raise ExecutionError(task.name, e) from e
 
@@ -284,3 +293,9 @@ class Executor:
             if self.run(target):
                 any_executed = True
         return any_executed
+
+    def _validate_vars_once(self) -> None:
+        if self._vars_validated:
+            return
+        self.vars_resolver.validate_tasks(self.registry.all_tasks())
+        self._vars_validated = True

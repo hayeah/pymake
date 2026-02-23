@@ -164,6 +164,75 @@ Key patterns demonstrated:
 
 ## Task Definition
 
+### Task vars
+
+Task parameters are first-class vars. Declare them in the function signature:
+
+```python
+from pathlib import Path
+from pymake import sh, task
+
+
+@task(outputs=[Path("build/app")])
+def build(optimize: bool = False, target: str = "x86_64"):
+    """Compile."""
+    sh(f"gcc -O{'2' if optimize else '0'} -march={target} -o build/app main.c")
+
+
+@task(inputs=[build])
+def deploy(env: str | None = None, port: int = 8080):
+    """Deploy."""
+    sh(f"./deploy.sh --env {env} --port {port}")
+```
+
+Rules:
+- Supported var types: `str`, `int`, `float`, `bool`, `Path`, and optional forms like `str | None`
+- Every var must have a default value, or be optional (e.g. `env: str | None`)
+- `*args` and `**kwargs` are not allowed in task signatures
+
+Set vars from a TOML file:
+
+```toml
+[build]
+optimize = true
+
+[deploy]
+env = "production"
+port = 443
+```
+
+```bash
+pymake deploy --vars-file vars/prod.toml
+# or:
+PYMAKE_VARS_FILE=vars/prod.toml pymake deploy
+```
+
+Set vars from CLI overrides:
+
+```bash
+# Dot notation (single var, type-directed parsing)
+pymake deploy --vars deploy.port=9090 --vars deploy.env=staging
+
+# Bulk JSON (multiple vars)
+pymake deploy --vars 'deploy={"env":"production","port":443}'
+```
+
+Precedence is:
+
+```
+function defaults < vars file < --vars overrides
+```
+
+`pymake list` shows vars and defaults for each task:
+
+```text
+Tasks:
+  build  - Compile.
+           vars: optimize (bool=false), target (str="x86_64")
+  deploy - Deploy.
+           vars: env (str?), port (int=8080)
+```
+
 ### Touch files
 
 Use `touch` for tasks that don't produce output files but should track execution:
@@ -277,6 +346,8 @@ Options:
   -j, --jobs N       Number of parallel workers
   -B, --force        Force rerun all tasks
   -q, --quiet        Suppress output
+  --vars-file FILE   Load task vars from TOML file (or PYMAKE_VARS_FILE)
+  --vars KEY=VALUE   Override vars; repeatable
 
 Shorthand:
   pymake build       Same as: pymake run build

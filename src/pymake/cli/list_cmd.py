@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
+from ..task import TaskVar
 from .context import CommandContext
 
 
@@ -54,9 +56,34 @@ class ListCommand:
                 doc = f" - {t.doc}" if t.doc else ""
                 default_marker = " (default)" if t.name == default_name else ""
                 print(f"  {t.name}{default_marker}{doc}")
+                if t.vars:
+                    formatted_vars = ", ".join(self._format_var(v) for v in t.vars)
+                    print(f"             vars: {formatted_vars}")
 
         if self.ctx.args.all_tasks and dynamic:
             print("\nDynamic tasks:")
             for t in sorted(dynamic, key=lambda x: x.name):
                 doc = f" - {t.doc}" if t.doc else ""
                 print(f"  {t.name}{doc}")
+                if t.vars:
+                    formatted_vars = ", ".join(self._format_var(v) for v in t.vars)
+                    print(f"             vars: {formatted_vars}")
+
+    def _format_var(self, var: TaskVar) -> str:
+        type_label = var.type.__name__
+        if var.is_optional:
+            type_label = f"{type_label}?"
+
+        show_default = not (var.is_optional and var.default is None)
+        if not show_default:
+            return f"{var.name} ({type_label})"
+        return f"{var.name} ({type_label}={self._format_default(var.default)})"
+
+    def _format_default(self, value: object) -> str:
+        if isinstance(value, str):
+            return f'"{value}"'
+        if isinstance(value, Path):
+            return f'"{value}"'
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return repr(value)

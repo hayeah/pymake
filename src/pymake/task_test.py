@@ -156,3 +156,73 @@ class TestTaskRegistry:
         registry.default("all")
         registry.clear()
         assert registry.default_task() is None
+
+    def test_register_extracts_vars_from_signature(self) -> None:
+        registry = TaskRegistry()
+
+        def deploy(
+            env: str | None = None, port: int = 8080, loud: bool = False
+        ) -> None:
+            pass
+
+        task = registry.register(deploy)
+        assert len(task.vars) == 3
+        assert task.vars[0].name == "env"
+        assert task.vars[0].type is str
+        assert task.vars[0].is_optional is True
+        assert task.vars[0].default is None
+        assert task.vars[1].name == "port"
+        assert task.vars[1].type is int
+        assert task.vars[1].default == 8080
+        assert task.vars[2].name == "loud"
+        assert task.vars[2].type is bool
+        assert task.vars[2].default is False
+
+    def test_register_optional_without_default_allowed(self) -> None:
+        registry = TaskRegistry()
+
+        def deploy(env: str | None) -> None:
+            pass
+
+        task = registry.register(deploy)
+        assert len(task.vars) == 1
+        assert task.vars[0].default is None
+        assert task.vars[0].is_optional is True
+
+    def test_register_missing_default_for_non_optional_raises(self) -> None:
+        registry = TaskRegistry()
+
+        def deploy(env: str) -> None:
+            pass
+
+        with pytest.raises(
+            ValueError, match="must have a default value or be Optional"
+        ):
+            registry.register(deploy)
+
+    def test_register_unsupported_var_type_raises(self) -> None:
+        registry = TaskRegistry()
+
+        def build(flags: list[str] | None = None) -> None:
+            pass
+
+        with pytest.raises(ValueError, match="unsupported type"):
+            registry.register(build)
+
+    def test_register_varargs_not_supported(self) -> None:
+        registry = TaskRegistry()
+
+        def build(*args: str) -> None:
+            pass
+
+        with pytest.raises(ValueError, match=r"\*args/\*\*kwargs not supported"):
+            registry.register(build)
+
+    def test_register_kwargs_not_supported(self) -> None:
+        registry = TaskRegistry()
+
+        def build(**kwargs: str) -> None:
+            pass
+
+        with pytest.raises(ValueError, match=r"\*args/\*\*kwargs not supported"):
+            registry.register(build)

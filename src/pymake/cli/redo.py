@@ -42,6 +42,7 @@ class RedoCommand:
         """Only redo the target task, not its dependents."""
         executor = Executor(
             self.ctx.registry,
+            vars_resolver=self.ctx.vars_resolver,
             parallel=False,
             force=True,
             verbose=self.ctx.verbose,
@@ -89,6 +90,7 @@ class RedoCommand:
 
         executor = Executor(
             self.ctx.registry,
+            vars_resolver=self.ctx.vars_resolver,
             parallel=self.ctx.parallel,
             max_workers=self.ctx.args.jobs,
             force=False,  # We'll selectively force

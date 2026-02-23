@@ -9,12 +9,14 @@ from .executor import (
 )
 from .resolver import CyclicDependencyError, DependencyResolver
 from .sh import sh
-from .task import Task, TaskRegistry, task
+from .task import Task, TaskRegistry, TaskVar, task
+from .vars import VarsResolver
 
 __all__ = [
     "task",
     "Task",
     "TaskRegistry",
+    "TaskVar",
     "Executor",
     "ExecutionError",
     "MissingInputError",
@@ -22,5 +24,6 @@ __all__ = [
     "UnproducibleInputError",
     "DependencyResolver",
     "CyclicDependencyError",
+    "VarsResolver",
     "sh",
 ]

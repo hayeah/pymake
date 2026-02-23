@@ -68,7 +68,16 @@ class CLI:
             if not arg.startswith("-"):
                 # Skip value for options that take arguments
                 prev = self.argv[i - 1] if i > 0 else ""
-                if prev in ("-f", "--file", "-C", "--directory", "-j", "--jobs"):
+                if prev in (
+                    "-f",
+                    "--file",
+                    "-C",
+                    "--directory",
+                    "-j",
+                    "--jobs",
+                    "--vars-file",
+                    "--vars",
+                ):
                     continue
                 return arg not in self.SUBCOMMANDS
         return False
@@ -115,6 +124,21 @@ class CLI:
             "--quiet",
             action="store_true",
             help="Quiet mode (suppress output)",
+        )
+        parser.add_argument(
+            "--vars-file",
+            default=os.environ.get("PYMAKE_VARS_FILE"),
+            help="Load task vars from TOML file (or PYMAKE_VARS_FILE)",
+        )
+        parser.add_argument(
+            "--vars",
+            action="append",
+            default=[],
+            metavar="KEY=VALUE",
+            help=(
+                "Override task vars; supports task.var=value and "
+                "task={\"json\": ...}. Repeatable."
+            ),
         )
         return parser
 

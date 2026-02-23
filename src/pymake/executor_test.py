@@ -13,6 +13,7 @@ from pymake import (
     MissingOutputError,
     TaskRegistry,
     UnproducibleInputError,
+    VarsResolver,
 )
 
 
@@ -377,3 +378,37 @@ class TestExecutor:
             executor = Executor(registry, verbose=False)
             executor.run("b")
             assert executed == ["a", "b"]
+
+    def test_executor_passes_resolved_vars(self) -> None:
+        registry = TaskRegistry()
+        seen: list[tuple[bool, int]] = []
+
+        def build(optimize: bool = False, jobs: int = 1) -> None:
+            seen.append((optimize, jobs))
+
+        registry.register(build)
+        resolver = VarsResolver(vars_overrides=["build.optimize=true", "build.jobs=4"])
+        executor = Executor(registry, vars_resolver=resolver, verbose=False)
+        executor.run("build")
+        assert seen == [(True, 4)]
+
+    def test_executor_uses_defaults_when_no_vars_sources(self) -> None:
+        registry = TaskRegistry()
+        seen: list[str] = []
+
+        def greet(name: str = "world") -> None:
+            seen.append(name)
+
+        registry.register(greet)
+        executor = Executor(registry, verbose=False)
+        executor.run("greet")
+        assert seen == ["world"]
+
+    def test_execute_task_validates_vars_overrides_once(self) -> None:
+        registry = TaskRegistry()
+        task = registry.register(lambda: None, name="build")
+        resolver = VarsResolver(vars_overrides=["ghost.port=1"])
+        executor = Executor(registry, vars_resolver=resolver, verbose=False)
+
+        with pytest.raises(ValueError, match="unknown task 'ghost'"):
+            executor._execute_task(task)

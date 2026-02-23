@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.console import Console
@@ -10,6 +11,7 @@ from rich.console import Console
 from ..doctor import Doctor
 from ..resolver import DependencyResolver
 from ..task import Task, TaskRegistry
+from ..vars import VarsResolver
 
 if TYPE_CHECKING:
     import argparse
@@ -31,6 +33,7 @@ class CommandContext:
         self.args = args
         self.console = Console()
         self._resolver: DependencyResolver | None = None
+        self._vars_resolver: VarsResolver | None = None
 
     @property
     def resolver(self) -> DependencyResolver:
@@ -48,6 +51,19 @@ class CommandContext:
     def verbose(self) -> bool:
         """Whether to show verbose output."""
         return not getattr(self.args, "quiet", False)
+
+    @property
+    def vars_resolver(self) -> VarsResolver:
+        """Lazily create and cache vars resolver."""
+        if self._vars_resolver is None:
+            raw_vars_file = getattr(self.args, "vars_file", None)
+            vars_file = Path(raw_vars_file) if raw_vars_file else None
+            vars_overrides = list(getattr(self.args, "vars", []) or [])
+            self._vars_resolver = VarsResolver(
+                vars_file=vars_file,
+                vars_overrides=vars_overrides,
+            )
+        return self._vars_resolver
 
     def find_target(self, target: str) -> Task:
         """Find target by name or output file, raising ValueError if not found."""

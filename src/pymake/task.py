@@ -3,8 +3,96 @@
 from __future__ import annotations
 
 import dataclasses
+import inspect
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from types import UnionType
+from typing import Any, Union, get_args, get_origin, get_type_hints
+
+SUPPORTED_VAR_TYPES = {str, int, float, bool, Path}
+
+
+@dataclasses.dataclass(frozen=True)
+class TaskVar:
+    """A variable extracted from a task function signature."""
+
+    name: str
+    type: type[Any]
+    default: Any
+    is_optional: bool
+
+
+def _is_optional(annotation: Any) -> bool:
+    """True if annotation is exactly T | None / Optional[T]."""
+    origin = get_origin(annotation)
+    if origin not in (Union, UnionType):
+        return False
+
+    args = get_args(annotation)
+    if len(args) != 2:
+        return False
+
+    return any(arg is type(None) for arg in args)
+
+
+def _unwrap_optional(annotation: Any) -> Any:
+    """Return T from Optional[T]."""
+    args = get_args(annotation)
+    for arg in args:
+        if arg is not type(None):
+            return arg
+    return annotation
+
+
+def vars_from_signature(func: Callable[..., None]) -> tuple[TaskVar, ...]:
+    """Extract and validate task variables from function signature."""
+    signature = inspect.signature(func)
+    type_hints = get_type_hints(func)
+    result: list[TaskVar] = []
+
+    for param in signature.parameters.values():
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            raise ValueError(f"Task '{func.__name__}': *args/**kwargs not supported")
+
+        annotation: Any = type_hints.get(param.name, param.annotation)
+        is_optional = False
+
+        if annotation is not inspect.Parameter.empty and _is_optional(annotation):
+            annotation = _unwrap_optional(annotation)
+            is_optional = True
+
+        if annotation is inspect.Parameter.empty:
+            annotation = str
+
+        if annotation not in SUPPORTED_VAR_TYPES:
+            raise ValueError(
+                f"Task '{func.__name__}': unsupported type {annotation} "
+                f"for var '{param.name}'"
+            )
+
+        if param.default is inspect.Parameter.empty:
+            if not is_optional:
+                raise ValueError(
+                    f"Task '{func.__name__}': var '{param.name}' "
+                    "must have a default value or be Optional"
+                )
+            default = None
+        else:
+            default = param.default
+
+        result.append(
+            TaskVar(
+                name=param.name,
+                type=annotation,
+                default=default,
+                is_optional=is_optional,
+            )
+        )
+
+    return tuple(result)
 
 
 @dataclasses.dataclass
@@ -12,9 +100,10 @@ class Task:
     """A build task with inputs, outputs, and execution function."""
 
     name: str
-    func: Callable[[], None]
+    func: Callable[..., None]
     inputs: tuple[Path, ...]
     outputs: tuple[Path, ...]
+    vars: tuple[TaskVar, ...] = ()
     run_if: Callable[[], bool] | None = None
     run_if_not: Callable[[], bool] | None = None
     doc: str | None = None
@@ -63,7 +152,7 @@ class TaskRegistry:
         self._output_to_task: dict[Path, str] = {}
         self._default: str | None = None
 
-    def default(self, name: str | Callable[[], None]) -> None:
+    def default(self, name: str | Callable[..., None]) -> None:
         """Set the default task to run when no target is specified."""
         if callable(name):
             self._default = name.__name__
@@ -76,10 +165,10 @@ class TaskRegistry:
 
     def register(
         self,
-        func: Callable[[], None],
+        func: Callable[..., None],
         *,
         name: str | None = None,
-        inputs: Sequence[str | Path | Callable[[], None]] = (),
+        inputs: Sequence[str | Path | Callable[..., None]] = (),
         outputs: Sequence[str | Path] = (),
         run_if: Callable[[], bool] | None = None,
         run_if_not: Callable[[], bool] | None = None,
@@ -114,12 +203,15 @@ class TaskRegistry:
                     f"Cannot register task '{task_name}'."
                 )
 
+        task_vars = vars_from_signature(func)
+
         # Create and store task
         task = Task(
             name=task_name,
             func=func,
             inputs=tuple(input_paths),
             outputs=output_paths,
+            vars=task_vars,
             run_if=run_if,
             run_if_not=run_if_not,
             doc=func.__doc__,
@@ -140,15 +232,15 @@ class TaskRegistry:
 
     def __call__(
         self,
-        inputs: Sequence[str | Path | Callable[[], None]] = (),
+        inputs: Sequence[str | Path | Callable[..., None]] = (),
         outputs: Sequence[str | Path] = (),
         run_if: Callable[[], bool] | None = None,
         run_if_not: Callable[[], bool] | None = None,
         touch: str | Path | None = None,
-    ) -> Callable[[Callable[[], None]], Callable[[], None]]:
+    ) -> Callable[[Callable[..., None]], Callable[..., None]]:
         """Decorator to register a task."""
 
-        def decorator(func: Callable[[], None]) -> Callable[[], None]:
+        def decorator(func: Callable[..., None]) -> Callable[..., None]:
             self.register(
                 func,
                 inputs=inputs,

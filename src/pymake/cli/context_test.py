@@ -4,7 +4,7 @@ import argparse
 
 import pytest
 
-from ..task import Task, TaskRegistry
+from ..task import TaskRegistry
 from .context import CommandContext
 
 
@@ -95,3 +95,15 @@ class TestCommandContext:
 
         # Should not raise or exit
         ctx.check_before_run(task)
+
+    def test_vars_resolver_cached(self) -> None:
+        """Test vars_resolver is lazily created and cached."""
+        registry = TaskRegistry()
+        args = argparse.Namespace(vars_file=None, vars=["build.port=2"])
+        ctx = CommandContext(registry, args)
+
+        resolver1 = ctx.vars_resolver
+        resolver2 = ctx.vars_resolver
+
+        assert resolver1 is resolver2
+        assert resolver1.vars_overrides == ["build.port=2"]
