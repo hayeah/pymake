@@ -19,7 +19,7 @@ pymake --help
 
 ```bash
 # Editable install for development
-pip install -e .
+uv pip install -e .
 ```
 
 ## Complete Example
