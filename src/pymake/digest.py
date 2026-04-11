@@ -6,10 +6,9 @@ fingerprint to a small digest file. Tasks use the instance method
 :meth:`TreeDigest.changed` as a ``run_if`` predicate; the executor calls
 :meth:`TreeDigest.commit` after the task succeeds to update the stored digest.
 
-Directory walking is delegated to :mod:`hayeah.core.lstree`, which gives us
+Directory walking is delegated to :mod:`pymake.lstree`, which gives us
 ``.gitignore`` + builtin-ignore filtering (``node_modules``, ``__pycache__``,
-``.venv`` …) for free. That import is lazy so the rest of pymake can still
-load when ``hayeah-core`` is not installed.
+``.venv`` …) for free.
 """
 
 from __future__ import annotations
@@ -18,25 +17,9 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from pymake.lstree import Query, walk
+
 __all__ = ["TreeDigest", "tree_digest"]
-
-
-def _lstree_walk_query() -> tuple[Any, Any]:
-    """Lazy import of :mod:`hayeah.core.lstree`.
-
-    Returns ``(walk, Query)``. Raises :class:`ImportError` with a helpful
-    install hint if the library isn't available.
-    """
-    try:
-        from hayeah.core.lstree import Query, walk  # type: ignore[import-untyped]
-    except ImportError as exc:
-        raise ImportError(
-            "pymake.tree_digest requires the 'hayeah-core' package for "
-            "directory walking (provides hayeah.core.lstree). Install it "
-            "with `uv pip install hayeah-core` or from the dotfiles lib at "
-            "github.com/hayeah/dotfiles/libs/hayeah-py."
-        ) from exc
-    return walk, Query
 
 
 def _make_hasher() -> tuple[Any, str]:
@@ -88,7 +71,6 @@ class TreeDigest:
         :meth:`commit` doesn't create a feedback loop on the next
         :meth:`changed` call.
         """
-        walk, Query = _lstree_walk_query()  # noqa: N806 — ``Query`` is the class name
         q = Query(
             globs=self.globs or None,
             exclude=self.exclude or None,
@@ -186,13 +168,13 @@ def tree_digest(
 
     Args:
         *paths: Files and directories to watch. Directories are walked
-            recursively via ``hayeah.core.lstree`` with gitignore + builtin
+            recursively via :mod:`pymake.lstree` with gitignore + builtin
             junk excluded by default.
         digest: Path to the digest file. Required, and always caller-supplied
             — there is no default. Pick a location that's already gitignored,
             e.g. next to your build output (``".build/web.digest"``).
         exclude: Additional exclude patterns layered on top of lstree's
-            defaults. Passed through to :class:`hayeah.core.lstree.Query`.
+            defaults. Passed through to :class:`pymake.lstree.Query`.
         globs: Optional include filter (e.g. ``["**/*.ts", "**/*.tsx"]``).
 
     Returns:
