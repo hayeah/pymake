@@ -324,6 +324,63 @@ def local_only():
     sh("./local-setup.sh")
 ```
 
+`--force` / `-B` bypasses both `run_if` and `run_if_not` (force means force).
+
+## Directory Change Detection: `tree_digest`
+
+`tree_digest` fingerprints a set of files/directories via mtime+size (the
+rsync trick) and persists the fingerprint to `.pymake/<slug>.digest`. Use it
+as a `run_if` predicate for tasks that depend on entire source trees, where
+listing every file as an `input=` would be impractical:
+
+```python
+from pymake import task, tree_digest, sh
+
+web_sources = tree_digest(
+    "webreader/src/",
+    "webreader/package.json",
+    "webreader/pnpm-lock.yaml",
+    state=".pymake/web_bundle.digest",
+)
+
+@task(
+    run_if=web_sources.changed,
+    touch=".pymake/web_bundle.done",
+)
+def web_bundle():
+    """Rebuild webreader only when something under webreader/ changed."""
+    sh("cd webreader && pnpm exec vp build")
+    sh("cp -r webreader/dist/ resources/webcontent/")
+```
+
+- On the first run (state file missing) `changed()` returns `True` and the
+  task runs. After a successful run, pymake automatically calls
+  `web_sources.commit()` to write the new fingerprint.
+- On subsequent runs with an untouched tree, `changed()` returns `False`
+  and the task is skipped (`[skip] web_bundle (run_if returned False)`).
+- `pymake -B` forces the task to run even when the digest is unchanged.
+- Directory walking respects `.gitignore` and a builtin ignore list
+  (`node_modules/`, `__pycache__/`, `.venv/`, …) so you don't need to spell
+  out every junk dir in `exclude=`.
+
+Parameters:
+
+- `*paths` — files and/or directories to watch.
+- `exclude=[...]` — extra exclude patterns layered on top of the defaults.
+- `globs=[...]` — optional include filter, e.g. `["**/*.ts", "**/*.tsx"]`.
+- `state=...` — explicit state file path. Defaults to
+  `.pymake/<slug>.digest` where `<slug>` is derived from the supplied paths
+  (override with `name="web"` to get `.pymake/web.digest`).
+
+Installation: `tree_digest` lazy-imports directory walking from the
+`hayeah-core` package (provides `hayeah.core.lstree`). If you use
+`tree_digest`, install it with
+`uv pip install hayeah-core` (or from the dotfiles lib at
+`github.com/hayeah/dotfiles/libs/hayeah-py`). Core pymake works without it;
+the import only fires when you actually call `tree_digest(...)`. Fingerprint
+hashing prefers `xxhash` (install with `uv pip install xxhash` for the
+fastest path) and falls back to stdlib `hashlib.blake2b`.
+
 ## CLI Reference
 
 ```
