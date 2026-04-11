@@ -1,3 +1,7 @@
+---
+description: Python Makefile alternative with dependency tracking, tree_digest change detection, and parallel execution. Use for build tasks, setup verification, and incremental rebuilds.
+---
+
 # pymake
 
 A Python Makefile alternative with dependency tracking and parallel execution.
