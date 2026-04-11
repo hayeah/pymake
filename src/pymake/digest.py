@@ -2,9 +2,9 @@
 
 A :class:`TreeDigest` fingerprints a set of files and directories using the
 rsync trick (mtime+size per file, not content hashing) and persists the
-fingerprint to a small state file. Tasks use the instance method
+fingerprint to a small digest file. Tasks use the instance method
 :meth:`TreeDigest.changed` as a ``run_if`` predicate; the executor calls
-:meth:`TreeDigest.commit` after the task succeeds to update the stored state.
+:meth:`TreeDigest.commit` after the task succeeds to update the stored digest.
 
 Directory walking is delegated to :mod:`hayeah.core.lstree`, which gives us
 ``.gitignore`` + builtin-ignore filtering (``node_modules``, ``__pycache__``,
@@ -63,10 +63,9 @@ class TreeDigest:
     def __init__(
         self,
         *paths: str | Path,
+        digest: str | Path,
         exclude: list[str] | None = None,
         globs: list[str] | None = None,
-        state: str | Path | None = None,
-        name: str | None = None,
     ) -> None:
         if not paths:
             raise ValueError("tree_digest requires at least one path")
@@ -74,21 +73,8 @@ class TreeDigest:
         self.paths: tuple[Path, ...] = tuple(Path(p) for p in paths)
         self.exclude: list[str] = list(exclude or [])
         self.globs: list[str] = list(globs or [])
-        self.name: str | None = name
-        self.state_path: Path | None = (
-            Path(state) if state is not None else self._default_state_path()
-        )
+        self.digest_path: Path = Path(digest)
         self._current_digest: str | None = None
-
-    def _default_state_path(self) -> Path:
-        """Derive a stable default state file under ``.pymake/``."""
-        slug = self.name or self._slug_from_paths()
-        return Path(".pymake") / f"{slug}.digest"
-
-    def _slug_from_paths(self) -> str:
-        """Deterministic short slug derived from the supplied paths."""
-        joined = "\n".join(p.as_posix() for p in self.paths).encode()
-        return hashlib.blake2b(joined, digest_size=6).hexdigest()
 
     def _walk(self) -> list[tuple[str, int, int]]:
         """Collect ``(key, mtime_ns, size)`` tuples for all watched files.
@@ -98,7 +84,7 @@ class TreeDigest:
         the caller supplies the same path strings, and distinguishes
         identically-named entries across different roots.
 
-        The state file (if it falls under a watched root) is filtered out so
+        The digest file (if it falls under a watched root) is filtered out so
         :meth:`commit` doesn't create a feedback loop on the next
         :meth:`changed` call.
         """
@@ -109,18 +95,16 @@ class TreeDigest:
             stat=True,
         )
 
-        # Resolve the state file's absolute path once so we can skip it
+        # Resolve the digest file's absolute path once so we can skip it
         # during the walk. ``resolve(strict=False)`` is a no-op if the file
         # doesn't exist yet.
-        state_abs: Path | None = (
-            self.state_path.resolve() if self.state_path is not None else None
-        )
+        digest_abs: Path = self.digest_path.resolve()
 
         entries: list[tuple[str, int, int]] = []
         for root in self.paths:
             root_label = root.as_posix()
             if root.is_file():
-                if state_abs is not None and root.resolve() == state_abs:
+                if root.resolve() == digest_abs:
                     continue
                 st = root.stat()
                 entries.append((root_label, st.st_mtime_ns, st.st_size))
@@ -135,7 +119,7 @@ class TreeDigest:
             for entry in walk(root, query=q):
                 if entry.is_dir:
                     continue
-                if state_abs is not None and (root_abs / entry.path) == state_abs:
+                if (root_abs / entry.path) == digest_abs:
                     continue
                 key = f"{root_label}/{entry.path.as_posix()}"
                 entries.append((key, entry.mtime_ns, entry.size))
@@ -156,38 +140,36 @@ class TreeDigest:
         return self._current_digest
 
     def changed(self) -> bool:
-        """Return ``True`` if the digest differs from the stored state.
+        """Return ``True`` if the digest differs from the stored digest file.
 
         Designed to be passed directly as a ``run_if`` predicate::
 
-            digest = tree_digest("src/")
-            @task(run_if=digest.changed, touch=".pymake/done")
+            digest = tree_digest("src/", digest=".build/src.digest")
+            @task(run_if=digest.changed)
             def build(): ...
 
         Computes the current digest on first call and caches it on the
         instance so :meth:`commit` can write it without re-walking.
         """
         current = self._ensure_current()
-        if self.state_path is None or not self.state_path.exists():
+        if not self.digest_path.exists():
             return True
         try:
-            stored = self.state_path.read_text().strip()
+            stored = self.digest_path.read_text().strip()
         except OSError:
             return True
         return stored != current
 
     def commit(self) -> None:
-        """Write the current digest to the state file.
+        """Write the current digest to the digest file.
 
         Called by the executor after a successful task run. If
         :meth:`changed` hasn't been called yet, the digest is computed now so
         ``commit`` still records an accurate snapshot.
         """
-        if self.state_path is None:
-            return
         current = self._ensure_current()
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        self.state_path.write_text(current + "\n")
+        self.digest_path.parent.mkdir(parents=True, exist_ok=True)
+        self.digest_path.write_text(current + "\n")
 
     def reset(self) -> None:
         """Drop the cached current digest (useful in tests)."""
@@ -196,10 +178,9 @@ class TreeDigest:
 
 def tree_digest(
     *paths: str | Path,
+    digest: str | Path,
     exclude: list[str] | None = None,
     globs: list[str] | None = None,
-    state: str | Path | None = None,
-    name: str | None = None,
 ) -> TreeDigest:
     """Create a :class:`TreeDigest` for the given paths.
 
@@ -207,21 +188,19 @@ def tree_digest(
         *paths: Files and directories to watch. Directories are walked
             recursively via ``hayeah.core.lstree`` with gitignore + builtin
             junk excluded by default.
+        digest: Path to the digest file. Required, and always caller-supplied
+            — there is no default. Pick a location that's already gitignored,
+            e.g. next to your build output (``".build/web.digest"``).
         exclude: Additional exclude patterns layered on top of lstree's
             defaults. Passed through to :class:`hayeah.core.lstree.Query`.
         globs: Optional include filter (e.g. ``["**/*.ts", "**/*.tsx"]``).
-        state: Path to the state file. Defaults to
-            ``.pymake/<slug>.digest`` where ``slug`` is derived from the
-            paths (or ``name`` if supplied).
-        name: Optional explicit slug used for the default state path.
 
     Returns:
         A configured :class:`TreeDigest`.
     """
     return TreeDigest(
         *paths,
+        digest=digest,
         exclude=exclude,
         globs=globs,
-        state=state,
-        name=name,
     )

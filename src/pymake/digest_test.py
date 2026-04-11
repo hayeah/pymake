@@ -49,13 +49,13 @@ class TestTreeDigestBasics:
         _write(tmp_path / "a.txt", "alpha")
         _write(tmp_path / "sub" / "b.txt", "bravo")
 
-        d1 = TreeDigest(tmp_path, state=tmp_path / ".state")
-        d2 = TreeDigest(tmp_path, state=tmp_path / ".state")
+        d1 = TreeDigest(tmp_path, digest=tmp_path / ".state")
+        d2 = TreeDigest(tmp_path, digest=tmp_path / ".state")
         assert d1._compute() == d2._compute()
 
     def test_mtime_change_flips_digest(self, tmp_path: Path) -> None:
         f = _write(tmp_path / "a.txt", "alpha")
-        d = TreeDigest(tmp_path, state=tmp_path / ".state")
+        d = TreeDigest(tmp_path, digest=tmp_path / ".state")
         before = d._compute()
 
         _bump_mtime(f)
@@ -66,7 +66,7 @@ class TestTreeDigestBasics:
 
     def test_size_change_flips_digest(self, tmp_path: Path) -> None:
         f = _write(tmp_path / "a.txt", "alpha")
-        d = TreeDigest(tmp_path, state=tmp_path / ".state")
+        d = TreeDigest(tmp_path, digest=tmp_path / ".state")
         before = d._compute()
 
         # Rewrite with different content at the same mtime
@@ -80,7 +80,7 @@ class TestTreeDigestBasics:
 
     def test_file_added_flips_digest(self, tmp_path: Path) -> None:
         _write(tmp_path / "a.txt")
-        d = TreeDigest(tmp_path, state=tmp_path / ".state")
+        d = TreeDigest(tmp_path, digest=tmp_path / ".state")
         before = d._compute()
 
         _write(tmp_path / "b.txt", "new")
@@ -90,21 +90,21 @@ class TestTreeDigestBasics:
     def test_file_removed_flips_digest(self, tmp_path: Path) -> None:
         _write(tmp_path / "a.txt")
         b = _write(tmp_path / "b.txt", "doomed")
-        d = TreeDigest(tmp_path, state=tmp_path / ".state")
+        d = TreeDigest(tmp_path, digest=tmp_path / ".state")
         before = d._compute()
 
         b.unlink()
         d.reset()
         assert d._compute() != before
 
-    def test_empty_paths_rejected(self) -> None:
+    def test_empty_paths_rejected(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError):
-            TreeDigest()
+            TreeDigest(digest=tmp_path / ".state")
 
     def test_missing_path_contributes_sentinel(self, tmp_path: Path) -> None:
         """A missing path should not crash; the digest reflects its absence."""
         missing = tmp_path / "nope"
-        d = TreeDigest(missing, state=tmp_path / ".state")
+        d = TreeDigest(missing, digest=tmp_path / ".state")
         # Should compute without raising.
         before = d._compute()
 
@@ -124,11 +124,11 @@ class TestFilters:
         _write(tmp_path / "keep.txt", "keep")
         _write(tmp_path / "drop" / "x.txt", "drop")
 
-        included = TreeDigest(tmp_path, state=tmp_path / ".state1")
+        included = TreeDigest(tmp_path, digest=tmp_path / ".state1")
         excluded = TreeDigest(
             tmp_path,
             exclude=["drop"],
-            state=tmp_path / ".state2",
+            digest=tmp_path / ".state2",
         )
         assert included._compute() != excluded._compute()
 
@@ -145,7 +145,7 @@ class TestFilters:
         d = TreeDigest(
             tmp_path,
             globs=["**/*.py"],
-            state=tmp_path / ".state",
+            digest=tmp_path / ".state",
         )
         before = d._compute()
 
@@ -165,7 +165,7 @@ class TestFilters:
         _write(tmp_path / "src" / "build" / "artifact.txt", "noise")
         (tmp_path / "src" / ".gitignore").write_text("build/\n")
 
-        d = TreeDigest(tmp_path / "src", state=tmp_path / ".state")
+        d = TreeDigest(tmp_path / "src", digest=tmp_path / ".state")
         before = d._compute()
 
         # Bumping an ignored file should not change the digest.
@@ -182,59 +182,50 @@ class TestFilters:
 class TestStateFile:
     def test_changed_true_first_time(self, tmp_path: Path) -> None:
         _write(tmp_path / "a.txt")
-        d = TreeDigest(tmp_path, state=tmp_path / ".state")
+        d = TreeDigest(tmp_path, digest=tmp_path / ".state")
         assert d.changed() is True
 
     def test_commit_then_changed_false(self, tmp_path: Path) -> None:
         _write(tmp_path / "a.txt")
-        d = TreeDigest(tmp_path, state=tmp_path / ".state")
+        d = TreeDigest(tmp_path, digest=tmp_path / ".state")
         assert d.changed() is True
         d.commit()
 
         # Fresh instance reads from disk.
-        d2 = TreeDigest(tmp_path, state=tmp_path / ".state")
+        d2 = TreeDigest(tmp_path, digest=tmp_path / ".state")
         assert d2.changed() is False
 
     def test_changed_flips_after_mutation(self, tmp_path: Path) -> None:
         f = _write(tmp_path / "a.txt")
-        d = TreeDigest(tmp_path, state=tmp_path / ".state")
+        d = TreeDigest(tmp_path, digest=tmp_path / ".state")
         d.changed()
         d.commit()
 
         _bump_mtime(f)
-        d2 = TreeDigest(tmp_path, state=tmp_path / ".state")
+        d2 = TreeDigest(tmp_path, digest=tmp_path / ".state")
         assert d2.changed() is True
 
     def test_commit_without_prior_changed_call(self, tmp_path: Path) -> None:
         _write(tmp_path / "a.txt")
-        d = TreeDigest(tmp_path, state=tmp_path / ".state")
+        d = TreeDigest(tmp_path, digest=tmp_path / ".state")
         # commit() before changed() should still record a valid snapshot
         d.commit()
 
-        d2 = TreeDigest(tmp_path, state=tmp_path / ".state")
+        d2 = TreeDigest(tmp_path, digest=tmp_path / ".state")
         assert d2.changed() is False
 
-    def test_default_state_path_under_pymake(self, tmp_path: Path) -> None:
+    def test_digest_kwarg_is_required(self, tmp_path: Path) -> None:
+        """``digest=`` has no default — omitting it is a TypeError."""
         _write(tmp_path / "a.txt")
-        cwd = Path.cwd()
-        os.chdir(tmp_path)
-        try:
-            d = TreeDigest("a.txt")
-            assert d.state_path is not None
-            assert d.state_path.parent.name == ".pymake"
-            assert d.state_path.suffix == ".digest"
-        finally:
-            os.chdir(cwd)
+        with pytest.raises(TypeError):
+            TreeDigest(tmp_path)  # type: ignore[call-arg]
 
-    def test_named_default_state_path(self, tmp_path: Path) -> None:
+    def test_digest_path_is_stored(self, tmp_path: Path) -> None:
+        """The caller-supplied digest path is stored verbatim."""
         _write(tmp_path / "a.txt")
-        cwd = Path.cwd()
-        os.chdir(tmp_path)
-        try:
-            d = TreeDigest("a.txt", name="web")
-            assert d.state_path == Path(".pymake") / "web.digest"
-        finally:
-            os.chdir(cwd)
+        explicit = tmp_path / "sub" / "my.digest"
+        d = TreeDigest(tmp_path, digest=explicit)
+        assert d.digest_path == explicit
 
 
 # ----------------------------------------------------------------------
@@ -247,7 +238,7 @@ class TestMultiRoot:
         f = _write(tmp_path / "file.txt", "solo")
         _write(tmp_path / "dir" / "a.py")
 
-        d = TreeDigest(f, tmp_path / "dir", state=tmp_path / ".state")
+        d = TreeDigest(f, tmp_path / "dir", digest=tmp_path / ".state")
         before = d._compute()
 
         _bump_mtime(f)
@@ -264,13 +255,13 @@ class TestMultiRoot:
         combined = TreeDigest(
             tmp_path / "x",
             tmp_path / "y",
-            state=tmp_path / ".state",
+            digest=tmp_path / ".state",
         )
-        only_x = TreeDigest(tmp_path / "x", state=tmp_path / ".other")
+        only_x = TreeDigest(tmp_path / "x", digest=tmp_path / ".other")
         assert combined._compute() != only_x._compute()
 
     def test_factory_returns_instance(self, tmp_path: Path) -> None:
-        d = tree_digest(tmp_path, state=tmp_path / ".state")
+        d = tree_digest(tmp_path, digest=tmp_path / ".state")
         assert isinstance(d, TreeDigest)
 
 
@@ -288,6 +279,6 @@ class TestHashFallback:
         monkeypatch.setitem(sys.modules, "xxhash", None)
 
         _write(tmp_path / "a.txt")
-        d = TreeDigest(tmp_path, state=tmp_path / ".state")
+        d = TreeDigest(tmp_path, digest=tmp_path / ".state")
         digest = d._compute()
         assert digest.startswith("blake2b64:")

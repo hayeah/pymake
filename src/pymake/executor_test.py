@@ -541,7 +541,7 @@ class TestRunIfEndToEndWithTreeDigest:
         f = src / "main.py"
         f.write_text("print('one')\n")
 
-        digest = TreeDigest(src, state=tmp_path / ".state")
+        digest = TreeDigest(src, digest=tmp_path / ".state")
 
         registry = TaskRegistry()
         runs: list[int] = []
@@ -558,7 +558,7 @@ class TestRunIfEndToEndWithTreeDigest:
 
         # Second run (fresh digest instance to simulate a new invocation):
         # nothing changed, should skip.
-        digest2 = TreeDigest(src, state=tmp_path / ".state")
+        digest2 = TreeDigest(src, digest=tmp_path / ".state")
         registry2 = TaskRegistry()
         registry2.register(lambda: runs.append(2), name="build", run_if=digest2.changed)
         Executor(registry2, verbose=False).run("build")
@@ -568,14 +568,14 @@ class TestRunIfEndToEndWithTreeDigest:
         st = f.stat()
         os.utime(f, (st.st_atime, st.st_mtime + 5))
 
-        digest3 = TreeDigest(src, state=tmp_path / ".state")
+        digest3 = TreeDigest(src, digest=tmp_path / ".state")
         registry3 = TaskRegistry()
         registry3.register(lambda: runs.append(3), name="build", run_if=digest3.changed)
         Executor(registry3, verbose=False).run("build")
         assert len(runs) == 2
 
         # --force runs even if digest would say "unchanged".
-        digest4 = TreeDigest(src, state=tmp_path / ".state")
+        digest4 = TreeDigest(src, digest=tmp_path / ".state")
         registry4 = TaskRegistry()
         registry4.register(lambda: runs.append(4), name="build", run_if=digest4.changed)
         Executor(registry4, force=True, verbose=False).run("build")
