@@ -1,6 +1,7 @@
 """Tests for executor.py."""
 
 import io
+import os
 import tempfile
 from pathlib import Path
 
@@ -412,3 +413,170 @@ class TestExecutor:
 
         with pytest.raises(ValueError, match="unknown task 'ghost'"):
             executor._execute_task(task)
+
+
+class _Predicate:
+    """Test double for a stateful run_if predicate (mimics TreeDigest)."""
+
+    def __init__(self, answers: list[bool]) -> None:
+        self.answers = answers
+        self.calls = 0
+        self.commits = 0
+
+    def __call__(self) -> bool:
+        result = self.answers[min(self.calls, len(self.answers) - 1)]
+        self.calls += 1
+        return result
+
+    def commit(self) -> None:
+        self.commits += 1
+
+
+class TestRunIfCommitProtocol:
+    """Executor integration for the ``run_if.commit()`` hook."""
+
+    def test_commit_called_after_successful_run(self) -> None:
+        registry = TaskRegistry()
+        executed: list[str] = []
+        predicate = _Predicate([True])
+
+        registry.register(
+            lambda: executed.append("a"),
+            name="a",
+            run_if=predicate,
+        )
+
+        Executor(registry, verbose=False).run("a")
+        assert executed == ["a"]
+        assert predicate.commits == 1
+
+    def test_commit_not_called_when_run_if_skipped(self) -> None:
+        registry = TaskRegistry()
+        executed: list[str] = []
+        predicate = _Predicate([False])
+
+        registry.register(
+            lambda: executed.append("a"),
+            name="a",
+            run_if=predicate,
+        )
+
+        Executor(registry, verbose=False).run("a")
+        assert executed == []
+        assert predicate.commits == 0
+
+    def test_commit_not_called_when_task_fails(self) -> None:
+        registry = TaskRegistry()
+        predicate = _Predicate([True])
+
+        def boom() -> None:
+            raise RuntimeError("nope")
+
+        registry.register(boom, name="boom", run_if=predicate)
+
+        with pytest.raises(ExecutionError):
+            Executor(registry, verbose=False).run("boom")
+        assert predicate.commits == 0
+
+    def test_plain_callable_run_if_without_commit_attr(self) -> None:
+        """Back-compat: a bare lambda run_if must still work."""
+        registry = TaskRegistry()
+        executed: list[str] = []
+
+        registry.register(
+            lambda: executed.append("a"),
+            name="a",
+            run_if=lambda: True,  # no .commit attribute
+        )
+
+        Executor(registry, verbose=False).run("a")
+        assert executed == ["a"]
+
+
+class TestForceBypassesRunIf:
+    """``--force`` should run the task regardless of run_if / run_if_not."""
+
+    def test_force_bypasses_run_if_false(self) -> None:
+        registry = TaskRegistry()
+        executed: list[str] = []
+        predicate = _Predicate([False])
+
+        registry.register(
+            lambda: executed.append("a"),
+            name="a",
+            run_if=predicate,
+        )
+
+        Executor(registry, force=True, verbose=False).run("a")
+        assert executed == ["a"]
+        # run_if should not even have been consulted
+        assert predicate.calls == 0
+        # and commit still happens after the forced run so state stays fresh
+        assert predicate.commits == 1
+
+    def test_force_bypasses_run_if_not_true(self) -> None:
+        registry = TaskRegistry()
+        executed: list[str] = []
+
+        registry.register(
+            lambda: executed.append("a"),
+            name="a",
+            run_if_not=lambda: True,
+        )
+
+        Executor(registry, force=True, verbose=False).run("a")
+        assert executed == ["a"]
+
+
+class TestRunIfEndToEndWithTreeDigest:
+    """Drive the full digest-based skip loop through the executor."""
+
+    def test_digest_skip_then_change_then_force(self, tmp_path: Path) -> None:
+        pytest.importorskip("hayeah.core.lstree")
+
+        from pymake.digest import TreeDigest
+
+        src = tmp_path / "src"
+        src.mkdir()
+        f = src / "main.py"
+        f.write_text("print('one')\n")
+
+        digest = TreeDigest(src, state=tmp_path / ".state")
+
+        registry = TaskRegistry()
+        runs: list[int] = []
+
+        def build() -> None:
+            runs.append(1)
+
+        registry.register(build, run_if=digest.changed)
+
+        # First run: state file missing → runs and commits.
+        Executor(registry, verbose=False).run("build")
+        assert len(runs) == 1
+        assert (tmp_path / ".state").exists()
+
+        # Second run (fresh digest instance to simulate a new invocation):
+        # nothing changed, should skip.
+        digest2 = TreeDigest(src, state=tmp_path / ".state")
+        registry2 = TaskRegistry()
+        registry2.register(lambda: runs.append(2), name="build", run_if=digest2.changed)
+        Executor(registry2, verbose=False).run("build")
+        assert len(runs) == 1  # still 1 — task skipped
+
+        # Mutate source: mtime bump is enough.
+        st = f.stat()
+        os.utime(f, (st.st_atime, st.st_mtime + 5))
+
+        digest3 = TreeDigest(src, state=tmp_path / ".state")
+        registry3 = TaskRegistry()
+        registry3.register(lambda: runs.append(3), name="build", run_if=digest3.changed)
+        Executor(registry3, verbose=False).run("build")
+        assert len(runs) == 2
+
+        # --force runs even if digest would say "unchanged".
+        digest4 = TreeDigest(src, state=tmp_path / ".state")
+        registry4 = TaskRegistry()
+        registry4.register(lambda: runs.append(4), name="build", run_if=digest4.changed)
+        Executor(registry4, force=True, verbose=False).run("build")
+        assert len(runs) == 3

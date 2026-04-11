@@ -241,23 +241,23 @@ class Executor:
             self.log(f"[skip] {task.name} (up to date)")
             return False
 
-        # Check custom run_if condition
-        if task.run_if is not None:
-            try:
-                if not task.run_if():
-                    self.log(f"[skip] {task.name} (run_if returned False)")
-                    return False
-            except Exception as e:
-                raise ExecutionError(task.name, e) from e
+        # --force bypasses run_if / run_if_not entirely: force means force.
+        if not self.force:
+            if task.run_if is not None:
+                try:
+                    if not task.run_if():
+                        self.log(f"[skip] {task.name} (run_if returned False)")
+                        return False
+                except Exception as e:
+                    raise ExecutionError(task.name, e) from e
 
-        # Check custom run_if_not condition (skip if returns True)
-        if task.run_if_not is not None:
-            try:
-                if task.run_if_not():
-                    self.log(f"[skip] {task.name} (run_if_not returned True)")
-                    return False
-            except Exception as e:
-                raise ExecutionError(task.name, e) from e
+            if task.run_if_not is not None:
+                try:
+                    if task.run_if_not():
+                        self.log(f"[skip] {task.name} (run_if_not returned True)")
+                        return False
+                except Exception as e:
+                    raise ExecutionError(task.name, e) from e
 
         # Validate all input files exist before running
         for input_path in task.inputs:
@@ -283,6 +283,23 @@ class Executor:
         if task.touch:
             task.touch.parent.mkdir(parents=True, exist_ok=True)
             task.touch.touch()
+
+        # After a successful run, commit any stateful run_if predicate
+        # (e.g. TreeDigest.changed) so the next invocation sees the updated
+        # snapshot. ``run_if`` is usually a bound method like
+        # ``digest.changed`` — look for ``commit`` on the method itself
+        # first, then fall back to the bound instance (``__self__``). Plain
+        # lambdas and functions have neither and are unaffected.
+        commit = getattr(task.run_if, "commit", None)
+        if commit is None:
+            owner = getattr(task.run_if, "__self__", None)
+            if owner is not None:
+                commit = getattr(owner, "commit", None)
+        if callable(commit):
+            try:
+                commit()
+            except Exception as e:
+                raise ExecutionError(task.name, e) from e
 
         return True
 
