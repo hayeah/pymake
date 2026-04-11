@@ -329,33 +329,30 @@ def local_only():
 ## Directory Change Detection: `tree_digest`
 
 `tree_digest` fingerprints a set of files/directories via mtime+size (the
-rsync trick) and persists the fingerprint to `.pymake/<slug>.digest`. Use it
-as a `run_if` predicate for tasks that depend on entire source trees, where
-listing every file as an `input=` would be impractical:
+rsync trick) and persists the fingerprint to a caller-specified digest file.
+Use it as a `run_if` predicate for tasks that depend on entire source trees,
+where listing every file as an `input=` would be impractical:
 
 ```python
 from pymake import task, tree_digest, sh
 
 web_sources = tree_digest(
-    "webreader/src/",
+    "webreader/src",
     "webreader/package.json",
-    "webreader/pnpm-lock.yaml",
-    state=".pymake/web_bundle.digest",
+    digest=".build/web_bundle.digest",
 )
 
-@task(
-    run_if=web_sources.changed,
-    touch=".pymake/web_bundle.done",
-)
+@task(run_if=web_sources.changed)
 def web_bundle():
     """Rebuild webreader only when something under webreader/ changed."""
     sh("cd webreader && pnpm exec vp build")
     sh("cp -r webreader/dist/ resources/webcontent/")
 ```
 
-- On the first run (state file missing) `changed()` returns `True` and the
+- On the first run (digest file missing) `changed()` returns `True` and the
   task runs. After a successful run, pymake automatically calls
-  `web_sources.commit()` to write the new fingerprint.
+  `web_sources.commit()` to write the new fingerprint — no separate
+  `touch=` marker needed; the digest file IS the marker.
 - On subsequent runs with an untouched tree, `changed()` returns `False`
   and the task is skipped (`[skip] web_bundle (run_if returned False)`).
 - `pymake -B` forces the task to run even when the digest is unchanged.
@@ -363,14 +360,26 @@ def web_bundle():
   (`node_modules/`, `__pycache__/`, `.venv/`, …) so you don't need to spell
   out every junk dir in `exclude=`.
 
+Pitfalls to avoid:
+
+- **Don't track a task's output directory** in the same digest you gate that
+  task on. `changed()` caches the pre-body snapshot, so `commit()` (which
+  runs after the body) writes the *old* tree's fingerprint — and the next
+  invocation always sees a diff and re-runs.
+- **Don't track files whose mtime gets bumped by upstream "phony" tasks**
+  (e.g. `pnpm-lock.yaml` is touched by `pnpm install` on every run, even on
+  a no-op). Either track only the inputs you truly care about, or gate the
+  upstream task on the same digest so it doesn't run either.
+
 Parameters:
 
 - `*paths` — files and/or directories to watch.
+- `digest=...` — **required**. Path to the digest file. Pick a location
+  that's already gitignored — typically next to your build output or in a
+  generic build dir (e.g. `.build/web.digest`). There is no default; the
+  caller always specifies the path.
 - `exclude=[...]` — extra exclude patterns layered on top of the defaults.
 - `globs=[...]` — optional include filter, e.g. `["**/*.ts", "**/*.tsx"]`.
-- `state=...` — explicit state file path. Defaults to
-  `.pymake/<slug>.digest` where `<slug>` is derived from the supplied paths
-  (override with `name="web"` to get `.pymake/web.digest`).
 
 Installation: `tree_digest` lazy-imports directory walking from the
 `hayeah-core` package (provides `hayeah.core.lstree`). If you use
