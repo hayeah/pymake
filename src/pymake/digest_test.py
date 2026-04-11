@@ -8,14 +8,8 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip(
-    "hayeah.core.lstree",
-    reason="tree_digest requires hayeah-core (install from "
-    "github.com/hayeah/dotfiles/libs/hayeah-py).",
-)
-
-from pymake import tree_digest  # noqa: E402
-from pymake.digest import TreeDigest  # noqa: E402
+from pymake import tree_digest
+from pymake.digest import TreeDigest
 
 # ----------------------------------------------------------------------
 # Helpers
@@ -245,9 +239,7 @@ class TestMultiRoot:
         d.reset()
         assert d._compute() != before
 
-    def test_multiple_dir_roots_cross_collision_guarded(
-        self, tmp_path: Path
-    ) -> None:
+    def test_multiple_dir_roots_cross_collision_guarded(self, tmp_path: Path) -> None:
         """Two dirs containing identically-named files must not collide."""
         _write(tmp_path / "x" / "same.py", "one")
         _write(tmp_path / "y" / "same.py", "two")

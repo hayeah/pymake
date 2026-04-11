@@ -44,6 +44,9 @@ dev = [
 where = ["src"]
 include = ["pymake*"]
 
+[tool.setuptools.package-data]
+"pymake.lstree" = ["testdata/*.json"]
+
 [tool.mypy]
 python_version = "3.10"
 strict = true

@@ -532,8 +532,6 @@ class TestRunIfEndToEndWithTreeDigest:
     """Drive the full digest-based skip loop through the executor."""
 
     def test_digest_skip_then_change_then_force(self, tmp_path: Path) -> None:
-        pytest.importorskip("hayeah.core.lstree")
-
         from pymake.digest import TreeDigest
 
         src = tmp_path / "src"

@@ -1,0 +1,91 @@
+{
+  "_comment": "Language-agnostic test vectors for lstree walkers. Mirrors go-lstree's lstree_testdata.json, trimmed to the py-lstree feature set (no sort/limit/offset/base). Entries are ordered as the walker emits them: files at each depth in sorted order, then subdirs in sorted order, recursively.",
+  "fs": {
+    ".gitignore": {"content": "drafts/\n"},
+    "alice.epub": {"size": 100},
+    "readme.txt": {"size": 50},
+    "sci-fi/dune.epub": {"size": 200},
+    "sci-fi/neuromancer.epub": {"size": 150},
+    "drafts/wip.epub": {"size": 10},
+    "node_modules/pkg/index.js": {"size": 20},
+    ".git/config": {"size": 30}
+  },
+  "tests": [
+    {
+      "name": "default-gitignore-applies",
+      "query": {},
+      "expect": {
+        "entries": [
+          {"path": ".gitignore"},
+          {"path": "alice.epub"},
+          {"path": "readme.txt"},
+          {"path": ".git/config"},
+          {"path": "node_modules/pkg/index.js"},
+          {"path": "sci-fi/dune.epub"},
+          {"path": "sci-fi/neuromancer.epub"}
+        ]
+      },
+      "note": "drafts/ excluded by .gitignore. node_modules/ and .git/ NOT excluded because .gitignore exists (builtins off)."
+    },
+    {
+      "name": "no-ignore-shows-everything",
+      "query": {"noIgnore": true},
+      "expect": {
+        "entries": [
+          {"path": ".gitignore"},
+          {"path": "alice.epub"},
+          {"path": "readme.txt"},
+          {"path": ".git/config"},
+          {"path": "drafts/wip.epub"},
+          {"path": "node_modules/pkg/index.js"},
+          {"path": "sci-fi/dune.epub"},
+          {"path": "sci-fi/neuromancer.epub"}
+        ]
+      }
+    },
+    {
+      "name": "glob-recursive-epub",
+      "query": {"globs": ["**/*.epub"]},
+      "expect": {
+        "entries": [
+          {"path": "alice.epub"},
+          {"path": "sci-fi/dune.epub"},
+          {"path": "sci-fi/neuromancer.epub"}
+        ]
+      }
+    },
+    {
+      "name": "glob-with-negation",
+      "query": {"globs": ["**/*.epub", "!**/neuromancer*"]},
+      "expect": {
+        "entries": [
+          {"path": "alice.epub"},
+          {"path": "sci-fi/dune.epub"}
+        ]
+      }
+    },
+    {
+      "name": "glob-scoped-subdir",
+      "query": {"globs": ["sci-fi/**"]},
+      "expect": {
+        "entries": [
+          {"path": "sci-fi/dune.epub"},
+          {"path": "sci-fi/neuromancer.epub"}
+        ]
+      }
+    },
+    {
+      "name": "exclude-stage-three",
+      "query": {"exclude": ["sci-fi"]},
+      "expect": {
+        "entries": [
+          {"path": ".gitignore"},
+          {"path": "alice.epub"},
+          {"path": "readme.txt"},
+          {"path": ".git/config"},
+          {"path": "node_modules/pkg/index.js"}
+        ]
+      }
+    }
+  ]
+}

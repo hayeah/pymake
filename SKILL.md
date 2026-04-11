@@ -367,13 +367,16 @@ def web_bundle():
 Pitfalls to avoid:
 
 - **Don't track a task's output directory** in the same digest you gate that
-  task on. `changed()` caches the pre-body snapshot, so `commit()` (which
-  runs after the body) writes the *old* tree's fingerprint — and the next
-  invocation always sees a diff and re-runs.
-- **Don't track files whose mtime gets bumped by upstream "phony" tasks**
-  (e.g. `pnpm-lock.yaml` is touched by `pnpm install` on every run, even on
-  a no-op). Either track only the inputs you truly care about, or gate the
-  upstream task on the same digest so it doesn't run either.
+  task on. `changed()` caches the pre-body snapshot the first time it's
+  called, and `commit()` (which runs *after* the task body) writes that
+  cached snapshot — so the digest never sees the body's writes, and the next
+  invocation always sees a diff and re-runs. Track inputs only; let the
+  digest file itself be the output marker.
+- **Don't track lockfiles** like `pnpm-lock.yaml`, `package-lock.json`, or
+  `uv.lock`. Package managers re-touch them (mtime bump) on every install,
+  even on a no-op, so the digest flips every run. Track `package.json` /
+  `pyproject.toml` instead, or gate the install task on the same digest so
+  the lockfile-toucher doesn't run either.
 
 Parameters:
 
@@ -385,14 +388,10 @@ Parameters:
 - `exclude=[...]` — extra exclude patterns layered on top of the defaults.
 - `globs=[...]` — optional include filter, e.g. `["**/*.ts", "**/*.tsx"]`.
 
-Installation: `tree_digest` lazy-imports directory walking from the
-`hayeah-core` package (provides `hayeah.core.lstree`). If you use
-`tree_digest`, install it with
-`uv pip install hayeah-core` (or from the dotfiles lib at
-`github.com/hayeah/dotfiles/libs/hayeah-py`). Core pymake works without it;
-the import only fires when you actually call `tree_digest(...)`. Fingerprint
-hashing prefers `xxhash` (install with `uv pip install xxhash` for the
-fastest path) and falls back to stdlib `hashlib.blake2b`.
+Installation: directory walking is provided by `pymake.lstree`, which is
+vendored into pymake — no extra install needed. Fingerprint hashing prefers
+`xxhash` (install with `uv pip install xxhash` for the fastest path) and
+falls back to stdlib `hashlib.blake2b`.
 
 ## CLI Reference
 
