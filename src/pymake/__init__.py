@@ -1,5 +1,6 @@
 """pymake - Python Makefile alternative."""
 
+from .digest import TreeDigest, tree_digest
 from .executor import (
     ExecutionError,
     Executor,
@@ -26,4 +27,6 @@ __all__ = [
     "CyclicDependencyError",
     "VarsResolver",
     "sh",
+    "tree_digest",
+    "TreeDigest",
 ]
