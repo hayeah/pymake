@@ -359,10 +359,14 @@ def web_bundle():
   `touch=` marker needed; the digest file IS the marker.
 - On subsequent runs with an untouched tree, `changed()` returns `False`
   and the task is skipped (`[skip] web_bundle (run_if returned False)`).
+- `tree_digest` stores only the final digest text at the caller-supplied
+  `digest=` path. There is no sidecar SQLite cache or project-local
+  metadata database to manage.
 - `pymake -B` forces the task to run even when the digest is unchanged.
 - Directory walking respects `.gitignore` and a builtin ignore list
   (`node_modules/`, `__pycache__/`, `.venv/`, …) so you don't need to spell
-  out every junk dir in `exclude=`.
+  out every junk dir in `exclude=`. Pymake also excludes its own `.pymake/`
+  bookkeeping directory from tree digests.
 
 Pitfalls to avoid:
 

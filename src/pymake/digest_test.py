@@ -221,6 +221,49 @@ class TestStateFile:
         d = TreeDigest(tmp_path, digest=explicit)
         assert d.digest_path == explicit
 
+    def test_changed_true_after_file_added_post_commit(self, tmp_path: Path) -> None:
+        _write(tmp_path / "a.txt")
+        d = TreeDigest(tmp_path, digest=tmp_path / ".state")
+        d.commit()
+
+        _write(tmp_path / "b.txt", "new")
+
+        d2 = TreeDigest(tmp_path, digest=tmp_path / ".state")
+        assert d2.changed() is True
+
+    def test_changed_true_after_file_removed_post_commit(self, tmp_path: Path) -> None:
+        _write(tmp_path / "a.txt")
+        doomed = _write(tmp_path / "b.txt", "gone")
+        d = TreeDigest(tmp_path, digest=tmp_path / ".state")
+        d.commit()
+
+        doomed.unlink()
+
+        d2 = TreeDigest(tmp_path, digest=tmp_path / ".state")
+        assert d2.changed() is True
+
+    def test_unchanged_tree_recomputes_aggregate_hash(self, tmp_path: Path) -> None:
+        _write(tmp_path / "a.txt")
+        d = TreeDigest(tmp_path, digest=tmp_path / ".state")
+        d.commit()
+
+        d2 = TreeDigest(tmp_path, digest=tmp_path / ".state")
+        calls = 0
+        original = TreeDigest._aggregate_digest
+
+        def record_call(self: TreeDigest, entries: list[object]) -> str:
+            nonlocal calls
+            calls += 1
+            return original(self, entries)
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(TreeDigest, "_aggregate_digest", record_call)
+        try:
+            assert d2.changed() is False
+            assert calls == 1
+        finally:
+            monkeypatch.undo()
+
 
 # ----------------------------------------------------------------------
 # Multi-root, mixed inputs, and the factory
@@ -274,3 +317,28 @@ class TestHashFallback:
         d = TreeDigest(tmp_path, digest=tmp_path / ".state")
         digest = d._compute()
         assert digest.startswith("blake2b64:")
+
+
+# ----------------------------------------------------------------------
+# Digest file behaviour
+# ----------------------------------------------------------------------
+
+
+class TestDigestStorage:
+    def test_commit_writes_digest_file_only(self, tmp_path: Path) -> None:
+        _write(tmp_path / "a.txt", "alpha")
+        d = TreeDigest(tmp_path, digest=tmp_path / ".state")
+        d.commit()
+
+        digest_text = (tmp_path / ".state").read_text().strip()
+        assert digest_text == d._compute()
+
+    def test_changed_detects_digest_file_tampering(self, tmp_path: Path) -> None:
+        _write(tmp_path / "a.txt", "alpha")
+        d = TreeDigest(tmp_path, digest=tmp_path / ".state")
+        d.commit()
+
+        (tmp_path / ".state").write_text("xxhash64:not-the-real-digest\n")
+
+        d2 = TreeDigest(tmp_path, digest=tmp_path / ".state")
+        assert d2.changed() is True
