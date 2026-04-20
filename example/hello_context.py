@@ -25,13 +25,14 @@ def make_pipeline(greeting: str, root: Path) -> pymake.TaskContext:
     (root / "name.txt").write_text("world")
 
     ctx = pymake.context(cwd=root)
+    task = ctx.task  # alias so the body mirrors Makefile.py
 
-    @ctx.task(inputs=["name.txt"], outputs=["greet.txt"])
+    @task(inputs=["name.txt"], outputs=["greet.txt"])
     def greet() -> None:
         name = (root / "name.txt").read_text().strip()
         (root / "greet.txt").write_text(f"{greeting}, {name}!\n")
 
-    @ctx.task(inputs=["greet.txt"], outputs=["shout.txt"])
+    @task(inputs=["greet.txt"], outputs=["shout.txt"])
     def shout() -> None:
         msg = (root / "greet.txt").read_text()
         (root / "shout.txt").write_text(msg.upper())
