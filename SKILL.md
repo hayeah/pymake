@@ -519,13 +519,14 @@ import pymake
 def pipeline(root: Path, greeting: str) -> pymake.TaskContext:
     (root / "name.txt").write_text("world")
     ctx = pymake.context(cwd=root)  # relative inputs/outputs resolve here
+    task = ctx.task                 # alias so the body mirrors Makefile.py
 
-    @ctx.task(inputs=["name.txt"], outputs=["greet.txt"])
+    @task(inputs=["name.txt"], outputs=["greet.txt"])
     def greet():
         name = (root / "name.txt").read_text().strip()
         (root / "greet.txt").write_text(f"{greeting}, {name}!\n")
 
-    @ctx.task(inputs=["greet.txt"], outputs=["shout.txt"])
+    @task(inputs=["greet.txt"], outputs=["shout.txt"])
     def shout():
         (root / "shout.txt").write_text(
             (root / "greet.txt").read_text().upper()
@@ -540,6 +541,14 @@ ctx.run(force=True)             # re-run everything
 ctx.run(force_from="greet")     # re-run greet and its downstream
 ctx.run(dry_run=True)           # print the plan, don't execute
 ```
+
+The `task = ctx.task` alias is deliberate: `TaskContext` is designed to be
+**syntactically compatible** with the module-level `Makefile.py` idiom, so a
+function body written against `ctx` reads identically to a `Makefile.py`
+body — same decorator shape, same `sh(...)` usage, same
+`@task(inputs=..., outputs=...)` kwargs. With only the one-line prelude, a
+`Makefile.py` body can be copy-pasted into a `context(cwd=...)` function and
+back. Future additions to `TaskContext` should preserve this invariant.
 
 The context API mirrors the CLI: `ctx.task` is the decorator (with
 `.register(...)` for dynamic cases), `ctx.default(target)` picks the
