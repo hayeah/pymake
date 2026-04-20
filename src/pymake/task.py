@@ -237,12 +237,15 @@ class TaskRegistry:
         run_if: Callable[[], bool] | None = None,
         run_if_not: Callable[[], bool] | None = None,
         touch: str | Path | None = None,
+        *,
+        name: str | None = None,
     ) -> Callable[[Callable[..., None]], Callable[..., None]]:
         """Decorator to register a task."""
 
         def decorator(func: Callable[..., None]) -> Callable[..., None]:
             self.register(
                 func,
+                name=name,
                 inputs=inputs,
                 outputs=outputs,
                 run_if=run_if,

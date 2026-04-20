@@ -505,6 +505,50 @@ output = sh("cat file", capture=True)  # Capture output
 sh("might-fail", check=False)       # Don't raise on error
 ```
 
+## Library Use: `pymake.context(cwd=...)`
+
+For ad-hoc or parameterized pipelines that don't fit the `Makefile.py`
+model, build a disposable `TaskContext` inside a regular Python function.
+The context holds its own registry — nothing leaks into the global
+`pymake.task` singleton, so multiple contexts can coexist in one process.
+
+```python
+from pathlib import Path
+import pymake
+
+def pipeline(root: Path, greeting: str) -> pymake.TaskContext:
+    (root / "name.txt").write_text("world")
+    ctx = pymake.context(cwd=root)  # relative inputs/outputs resolve here
+
+    @ctx.task(inputs=["name.txt"], outputs=["greet.txt"])
+    def greet():
+        name = (root / "name.txt").read_text().strip()
+        (root / "greet.txt").write_text(f"{greeting}, {name}!\n")
+
+    @ctx.task(inputs=["greet.txt"], outputs=["shout.txt"])
+    def shout():
+        (root / "shout.txt").write_text(
+            (root / "greet.txt").read_text().upper()
+        )
+
+    ctx.default(shout)
+    return ctx
+
+ctx = pipeline(Path("/tmp/demo"), "Hello")
+ctx.run()                       # runs the default (shout) + its deps
+ctx.run(force=True)             # re-run everything
+ctx.run(force_from="greet")     # re-run greet and its downstream
+ctx.run(dry_run=True)           # print the plan, don't execute
+```
+
+The context API mirrors the CLI: `ctx.task` is the decorator (with
+`.register(...)` for dynamic cases), `ctx.default(target)` picks the
+default, and `ctx.which(target)` / `ctx.graph(target)` / `ctx.clean(target)`
+provide the same introspection surface as `pymake which / graph / clean`.
+Relative paths resolve against `ctx.cwd`; absolute paths pass through.
+
+See `example/hello_context.py` for a runnable demo.
+
 ## Error Handling
 
 - Cyclic dependencies are detected and reported

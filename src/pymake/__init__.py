@@ -1,5 +1,6 @@
 """pymake - Python Makefile alternative."""
 
+from .context import TaskContext, context
 from .digest import TreeDigest, tree_digest
 from .executor import (
     ExecutionError,
@@ -18,6 +19,8 @@ __all__ = [
     "Task",
     "TaskRegistry",
     "TaskVar",
+    "TaskContext",
+    "context",
     "Executor",
     "ExecutionError",
     "MissingInputError",
