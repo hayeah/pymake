@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
+from .. import uvboot
 from ..executor import ExecutionError, MissingOutputError
 from ..task import task
 from .clean import CleanCommand
@@ -173,6 +174,8 @@ class CLI:
             print(f"Error: {path} not found", file=sys.stderr)
             sys.exit(1)
 
+        self._maybe_reexec_uv(path)
+
         code = path.read_text()
         globals_dict = {
             "__name__": "__main__",
@@ -189,6 +192,17 @@ class CLI:
         except Exception as e:
             print(f"Error loading {path}: {e}", file=sys.stderr)
             sys.exit(1)
+
+    def _maybe_reexec_uv(self, makefile: Path) -> None:
+        """Re-exec under `uv run --project` when the Makefile opts in (uvboot)."""
+        directory = uvboot.project_dir(makefile)
+        if directory is None:
+            return
+        cmd = uvboot.uv_command(directory, self.argv)
+        if cmd is None:
+            return
+        env = {**os.environ, uvboot.ENV_GUARD: str(directory)}
+        os.execvpe(cmd[0], cmd, env)
 
     def _run_target_mode(self) -> NoReturn:
         """Handle direct target execution (e.g., `pymake build`)."""

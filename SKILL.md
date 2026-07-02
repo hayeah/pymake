@@ -24,7 +24,45 @@ pymake --help
 ```bash
 # Editable install for development
 uv pip install -e .
+
+# Or as a global editable tool (source changes take effect immediately)
+uv tool install -e .
 ```
+
+## Project Dependencies via uv
+
+A Makefile.py that needs third-party imports declares them in an adjacent
+`pyproject.toml` and opts in with a `[tool.pymake]` table:
+
+```toml
+# pyproject.toml, next to Makefile.py
+[project]
+name = "myproject-build"
+version = "0"
+requires-python = ">=3.12"
+dependencies = ["maxminddb>=2.6"]
+
+[tool.uv]
+package = false        # deps-only project; nothing to build/install
+
+[tool.pymake]          # opt-in: pymake bootstraps `uv run --project` here
+```
+
+With that in place, a bare `pymake <task>` re-execs itself under
+`uv run --project <dir>` before loading the Makefile — uv syncs the project venv
+(creating `.venv/` and `uv.lock`) and every `import` inside tasks resolves against
+it. pymake injects **itself** into that run (`--with-editable <checkout>` when
+installed editable, else `--with hayeah-pymake==<ver>`), so the project does *not*
+list pymake in its dependencies.
+
+Details:
+
+- The guard env `PYMAKE_UV_PROJECT=<abs dir>` marks the active project. It is
+  dir-valued, so a task that shells out to `pymake -C <other-project>` still
+  bootstraps the *other* project's env.
+- `PYMAKE_NO_UV=1` disables the bootstrap.
+- No `uv` on PATH or no `[tool.pymake]` table → plain behavior, no re-exec.
+- Gitignore `.venv/`; commit `uv.lock` for reproducible task deps.
 
 ## Complete Example
 
