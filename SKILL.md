@@ -206,6 +206,141 @@ Key patterns demonstrated:
 
 ## Task Definition
 
+### Task groups: a class as a namespace of tasks
+
+Tasks that share context — paths, injected services, a change digest — are
+naturally a class: the instance carries the context, the methods are the task
+bodies. Register a **bound method** by passing it to `task(...)` directly; the
+task name is inferred as `<ClassName>.<method>`:
+
+```python
+from pymake import sh, task
+
+
+class Windows:
+    """Everything Windows.* — the instance carries the platform context."""
+
+    def __init__(self, out_dir: Path, digest):
+        self.out_dir = out_dir
+        self.digest = digest
+        self.installer = out_dir / "app.msi"
+
+    def build_app(self, type: str = "release"):
+        """Compile the app for Windows."""
+        sh(f"./build.sh --target windows --type {type} -o {self.installer}")
+
+    def sign_app(self):
+        """[needs a signing cert] Sign the installer."""
+        sh(f"./sign.sh {self.installer}")
+
+
+windows = Windows(Path("dist/windows"), tree_digest("src", digest=".build/win.digest"))
+
+task(windows.build_app, outputs=[windows.installer], run_if=windows.digest.changed)
+task(windows.sign_app, inputs=[windows.build_app])
+# → registers Windows.build_app and Windows.sign_app
+```
+
+```bash
+pymake Windows.sign_app
+```
+
+Rules:
+
+- The **first positional argument** decides the form. A callable registers
+  immediately (this is `task.register` with name inference); anything else
+  returns the familiar `@task(inputs=..., outputs=...)` decorator, which is
+  unchanged and still the right spelling for loose module-level tasks.
+- Same keyword vocabulary as the decorator: `inputs`, `outputs`, `run_if`,
+  `run_if_not`, `touch`, `name`.
+- The namespace is the **runtime** class name, verbatim — a subclass renames
+  the whole group, and an inherited method lands in the subclass's namespace.
+  Name the class after the namespace and the CLI name is the source spelling.
+- `name="Apple.build_lib"` is the full-name escape hatch; it skips inference
+  entirely, so a task can live on one instance under another namespace.
+- Lambdas and functions defined inside other functions cannot be named
+  automatically — pass `name=`.
+- Every argument is a **plain expression evaluated after construction**:
+  `run_if=windows.digest.changed` is already the bound predicate, and
+  `outputs=[windows.installer]` is already this instance's artifact.
+
+The class itself stays completely ordinary — no decorator on methods, no base
+class, no metaclass, no pymake import in its module. Calling
+`Windows(...).build_app()` directly just runs the body, which makes the class
+the natural unit of testing: construct it against fakes and assert on what it
+did, with no registry or executor involved. The `task(...)` calls in
+`Makefile.py` are the only place pymake learns the class exists.
+
+**Parallel execution**: `-j` runs sibling tasks on threads that share one
+instance. Treat instance state as frozen after `__init__` (path catalogs,
+injected services) and keep per-run mutable state in locals — the same
+discipline module globals already require.
+
+### Task groups with explicit names: `task.group(...)`
+
+Inference covers the common case; `task.group(namespace=..., sep=".")` covers
+the rest. It returns a small registrar whose `.task(...)` takes exactly the
+same arguments, naming tasks `<namespace><sep><method>`:
+
+```python
+group = task.group(namespace="build", sep="_")
+group.task(windows.build_app, outputs=[windows.installer])   # → build_app
+```
+
+Use it for:
+
+- **Parameterized groups** — two instances of one class would infer the same
+  name and collide (the duplicate-name error says so). Only the wiring knows
+  which is which:
+
+  ```python
+  class Probe:
+      def build_probe(self):
+          ...
+
+  mac_probe = Probe(targets=("aarch64-apple-darwin",), out=MAC_PROBE)
+  win_probe = Probe(targets=("x86_64-pc-windows-gnu",), out=WIN_PROBE)
+
+  task.group(namespace="Macos").task(mac_probe.build_probe, outputs=[MAC_PROBE])
+  task.group(namespace="Windows").task(win_probe.build_probe, outputs=[WIN_PROBE])
+  ```
+
+- **Converting an existing flat-name Makefile** — `sep="_"` reproduces
+  today's `namespace_verb_output` names byte-for-byte, so a Makefile can move
+  to classes with zero renames; switching to inferred dotted names is then an
+  independent change.
+
+`namespace` is a single identifier (no dots — one namespace level) and `sep`
+is `"."` or `"_"`. The registrar holds no registry state, so two registrars
+for the same namespace are fine.
+
+### String task references
+
+A dependency can be written as a **quoted task name** instead of a callable:
+
+```python
+task(windows.build_app, inputs=["Common.build_assets", Path("src/main.c")])
+```
+
+- A `str` input that exactly matches a registered task name becomes a task
+  dependency; every other string, and **every `Path` object unconditionally**,
+  is a file. Task names contain no `/`, so real paths never collide — pass
+  `Path(...)` for files and quoted names for tasks when in doubt.
+- String references are resolved after the whole Makefile has been imported,
+  so they are **forward references**: registration order does not matter, and
+  they are the only spelling that crosses modules without an import. Bound
+  methods (`inputs=[windows.build_app]`) are resolved at registration and
+  therefore must already be registered — but they are instance-precise, so
+  two instances of one class can never be confused.
+- The name must match the *registered* name — under a `sep="_"` group that is
+  `"build_app"`, not `"Build.app"`.
+- A dotted, slash-free string that matches no task and no file is reported as
+  `no task and no file named 'Common.build_assets' — is its group
+  registered?`, both at run time and by `pymake doctor`.
+
+`task.default(...)` accepts either spelling: `task.default("Windows.build_app")`
+or `task.default(windows.build_app)`.
+
 ### Task vars
 
 Task parameters are first-class vars. Declare them in the function signature:
@@ -232,7 +367,7 @@ Rules:
 - Every var must have a default value, or be optional (e.g. `env: str | None`)
 - `*args` and `**kwargs` are not allowed in task signatures
 
-Set vars from a TOML file:
+Set vars from a TOML file — one section per task, including namespaced ones:
 
 ```toml
 [build]
@@ -241,6 +376,9 @@ optimize = true
 [deploy]
 env = "production"
 port = 443
+
+[Windows.build_app]     # or the quoted form: ["Windows.build_app"]
+type = "release"
 ```
 
 ```bash
@@ -252,12 +390,26 @@ PYMAKE_VARS_FILE=vars/prod.toml pymake deploy
 Set vars from CLI overrides:
 
 ```bash
-# Dot notation (single var, type-directed parsing)
+# Qualified: the LAST dot-separated segment is the var name, everything
+# before it is the task name (so namespaced tasks work unchanged).
 pymake deploy --vars deploy.port=9090 --vars deploy.env=staging
+pymake Windows.build_app --vars Windows.build_app.type=dev
 
-# Bulk JSON (multiple vars)
-pymake deploy --vars 'deploy={"env":"production","port":443}'
+# Naked: a key with no dot sets that var on every target NAMED on the
+# command line that declares it.
+pymake Windows.build_app --vars type=dev
+pymake Windows.build_app Macos.build_app --vars type=dev   # sets both
 ```
+
+Rules for `--vars`:
+
+- Split on the first `=`, then on the **last** dot of the key. Var names are
+  Python identifiers and never contain dots, so this is purely positional;
+  dots in the *value* are untouched.
+- A naked key applies only to explicit targets, never to their dependencies —
+  vars are per-task. If no named target declares the var, that is an error.
+- There is no bulk-JSON form (`--vars 'deploy={"env":"prod"}'`); use a vars
+  file section, or one `--vars` per var.
 
 Precedence is:
 
@@ -458,7 +610,8 @@ Options:
   -B, --force        Force rerun all tasks
   -q, --quiet        Suppress output
   --vars-file FILE   Load task vars from TOML file (or PYMAKE_VARS_FILE)
-  --vars KEY=VALUE   Override vars; repeatable
+  --vars KEY=VALUE   Override vars: <task>.<var>=value, or a bare <var>=value
+                     applying to the named targets; repeatable
 
 Shorthand:
   pymake build       Same as: pymake run build
@@ -509,7 +662,8 @@ pymake doctor              # Check all tasks
 pymake doctor build        # Check only tasks needed for 'build'
 ```
 
-Reports cyclic dependencies and inputs that don't exist and no task produces.
+Reports cyclic dependencies, inputs that don't exist and no task produces, and
+string task references (`"Ns.method"`) that match no task and no file.
 
 ### clean command
 
@@ -594,12 +748,22 @@ default, and `ctx.which(target)` / `ctx.graph(target)` / `ctx.clean(target)`
 provide the same introspection surface as `pymake which / graph / clean`.
 Relative paths resolve against `ctx.cwd`; absolute paths pass through.
 
+Task groups work the same way here: `ctx.task(instance.method, ...)` registers
+with the inferred `<ClassName>.<method>` name, and `ctx.task.group(...)`
+returns the same registrar. String **task** references are the one exception —
+a context resolves every string input as a path against `ctx.cwd`, so depend on
+tasks by bound method (`inputs=[pipeline.fetch]`) inside a context.
+
 See `example/hello_context.py` for a runnable demo.
 
 ## Error Handling
 
 - Cyclic dependencies are detected and reported
 - Duplicate output files across tasks raise an error
+- Duplicate task names raise an error; when two instances of one class infer
+  the same name, the message points at `task.group(namespace=...)`
+- An unresolved `"Ns.method"` string input is reported as a missing task
+  reference, not a missing file
 - Task failures stop execution and report the error
 - Missing input files (not produced by any task) raise `UnproducibleInputError`
 - Input files that don't exist at execution time raise `MissingInputError`

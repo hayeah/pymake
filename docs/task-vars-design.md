@@ -67,43 +67,70 @@ PYMAKE_VARS_FILE=./prod.toml pymake build
 
 TOML is a natural fit — native support for `str`, `int`, `float`, `bool`. No quoting gymnastics.
 
+A namespaced task gets a section of the same name. TOML parses a dotted header as nesting (`[Windows.build_app]` is table `Windows` containing table `build_app`), so the loader flattens one level back into a dotted task name — unambiguous because var values are scalars, never tables. The quoted form is accepted verbatim:
+
+```toml
+[Windows.build_app]
+type = "release"
+
+["Macos.build_app"]     # same thing, spelled flat
+type = "release"
+```
+
+Sections are always per-task; there is no vars-file equivalent of a naked key.
+
 ### `--vars` CLI (highest priority)
 
 The `--vars` flag supports two forms, detected by whether the key contains a dot:
 
-**Bulk JSON** — set multiple vars for a task at once:
-
-```bash
-pymake deploy --vars 'deploy={"env":"staging","port":3000}'
-pymake build --vars 'build={"optimize":true}'
-```
-
-Format: `task_name=json_object`. The left side has no dot, so the right side is parsed as a JSON object.
-
-**Dot notation** — set a single var with type-directed parsing:
+**Qualified** — set a single var on a named task, with type-directed parsing:
 
 ```bash
 pymake deploy --vars deploy.env=staging --vars deploy.port=3000
 pymake build --vars build.optimize=true
+pymake Windows.build_app --vars Windows.build_app.type=dev
 ```
 
-Format: `task.key=value`. The dot in the left side signals single-var mode. The string value is coerced to the var's declared type.
+Format: `<task>.<var>=value`. The **last** dot-separated segment of the key is the var name; everything before it is the task name, which may itself be namespaced. Var names are Python identifiers and never contain dots, so the split is purely positional — no registry consultation while parsing. The string value is coerced to the var's declared type.
 
-Both forms can be mixed. Multiple `--vars` flags are applied left-to-right (later wins for same key in same task):
+**Naked** — set a var on whatever is being run:
 
 ```bash
-pymake deploy \
-  --vars 'deploy={"env":"production","port":443}' \
-  --vars deploy.port=9090
-# result: env="production", port=9090
+pymake Windows.build_app --vars type=dev
+pymake Windows.build_app Macos.build_app --vars type=dev   # sets both
 ```
+
+Format: `<var>=value`. A naked key binds to every task **named on the command line** that declares that var. Dependency tasks never receive naked vars — vars are per-task, and only explicit targets are addressed. If no named target declares the var, that is an error:
+
+```
+Error: --vars entry 'stamp=1' : no target declares var 'stamp'
+       (targets: Windows.build_app); qualify it as <task>.stamp=1
+```
+
+The naked form pays off on namespaced tasks, where the qualified form repeats the task name in full:
+
+```bash
+# qualified                                    # naked
+pymake Macos.build_release \                   pymake Macos.build_release \
+  --vars Macos.build_release.stamp=1.2.3 \       --vars stamp=1.2.3 \
+  --vars Macos.build_release.type=dev            --vars type=dev
+```
+
+Both forms can be mixed. Multiple `--vars` flags are applied left-to-right (later wins for the same var on the same task):
+
+```bash
+pymake deploy --vars deploy.port=443 --vars deploy.port=9090
+# result: port=9090
+```
+
+There is no bulk-JSON entry (`--vars 'deploy={"env":"prod"}'`). The vars file's per-task sections cover that use case; a JSON-object value on a naked key is rejected with a pointer to it.
 
 ### Detection rule
 
 Split on the first `=`. Inspect the left side:
 
-- Contains `.` → **dot notation**: `task.key=value`
-- No `.` → **bulk JSON**: `task_name={...}`
+- Contains `.` → **qualified**: `<task>.<var>=value`, split on the **last** dot
+- No `.` → **naked**: `<var>=value`, bound to the CLI-named targets that declare it
 
 ## Resolution order
 
@@ -330,24 +357,25 @@ class VarsResolver:
 ### Parsing `--vars` entries
 
 ```python
-def parse_vars_entry(entry: str) -> tuple[str, str | None, Any]:
+def parse_vars_entry(entry: str) -> tuple[str | None, str, str]:
     """Parse a --vars entry.
 
-    Returns (task_name, var_name_or_none, value).
-    - Dot notation: ("deploy", "port", "9090")  — raw string, coerced later
-    - Bulk JSON:    ("deploy", None, {"env": "staging", "port": 3000})
+    Returns (task_name_or_none, var_name, value) — the value is always the
+    raw string, coerced later against the var's declared type.
+    - Qualified: ("Windows.build_app", "type", "dev")
+    - Naked:     (None, "type", "dev")
     """
-    key, _, raw_value = entry.partition("=")
-    if not raw_value and not _:
+    key, sep, raw_value = entry.partition("=")
+    if sep == "":
         raise ValueError(f"Invalid --vars entry: {entry!r} (missing '=')")
 
-    if "." in key:
-        task_name, _, var_name = key.partition(".")
-        return (task_name, var_name, raw_value)
-    else:
-        import json
-        return (key, None, json.loads(raw_value))
+    task_name, dot, var_name = key.rpartition(".")
+    if dot == "":
+        return (None, key, raw_value)
+    return (task_name, var_name, raw_value)
 ```
+
+A naked entry is bound at validation time: the `VarsResolver` knows the task names given on the command line and fans the value out to every one of them that declares the var.
 
 ## Executor changes
 
@@ -376,10 +404,10 @@ New global options:
                     (also: PYMAKE_VARS_FILE env var)
 --vars KEY=VALUE    Set vars (repeatable). Two forms:
                       task.var=value   Set one var (type-directed)
-                      task={"json"}    Set multiple vars at once
+                      var=value        Set it on the named targets
 ```
 
-These are parsed before target dispatch and passed to the `VarsResolver`.
+These are parsed before target dispatch and passed to the `VarsResolver`, along with the names of the targets being run (needed to bind naked keys).
 
 ## `pymake list` output
 
