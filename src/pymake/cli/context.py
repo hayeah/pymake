@@ -59,9 +59,11 @@ class CommandContext:
             raw_vars_file = getattr(self.args, "vars_file", None)
             vars_file = Path(raw_vars_file) if raw_vars_file else None
             vars_overrides = list(getattr(self.args, "vars", []) or [])
+            targets = list(getattr(self.args, "targets", []) or [])
             self._vars_resolver = VarsResolver(
                 vars_file=vars_file,
                 vars_overrides=vars_overrides,
+                targets=targets,
             )
         return self._vars_resolver
 

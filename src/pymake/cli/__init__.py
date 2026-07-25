@@ -137,8 +137,8 @@ class CLI:
             default=[],
             metavar="KEY=VALUE",
             help=(
-                "Override task vars; supports task.var=value and "
-                "task={\"json\": ...}. Repeatable."
+                "Override task vars: <task>.<var>=value, or a bare "
+                "<var>=value applying to the named targets. Repeatable."
             ),
         )
         return parser
@@ -192,6 +192,10 @@ class CLI:
         except Exception as e:
             print(f"Error loading {path}: {e}", file=sys.stderr)
             sys.exit(1)
+
+        # The Makefile is fully imported: promote string task references
+        # ("Ns.method" inputs) to dependencies before anything reads the graph.
+        self.registry.finalize()
 
     def _maybe_reexec_uv(self, makefile: Path) -> None:
         """Re-exec under `uv run --project` when the Makefile opts in (uvboot)."""

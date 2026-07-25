@@ -38,6 +38,10 @@ class RunCommand:
         for t in target_tasks:
             self.ctx.check_before_run(t)
 
+        # Naked --vars keys bind to the targets named on the command line;
+        # hand over the resolved task names (a target may be an output file).
+        self.ctx.vars_resolver.set_targets([t.name for t in target_tasks])
+
         executor = Executor(
             self.ctx.registry,
             vars_resolver=self.ctx.vars_resolver,
