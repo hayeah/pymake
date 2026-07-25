@@ -578,3 +578,101 @@ class TestRunIfEndToEndWithTreeDigest:
         registry4.register(lambda: runs.append(4), name="build", run_if=digest4.changed)
         Executor(registry4, force=True, verbose=False).run("build")
         assert len(runs) == 3
+
+
+class _Group:
+    """A group class whose instance carries context and a stateful digest."""
+
+    def __init__(self, label: str, out: Path) -> None:
+        self.label = label
+        self.out = out
+        self.digest = _Predicate([True, False])
+        self.ran: list[str] = []
+
+    def build_assets(self) -> None:
+        self.ran.append("build_assets")
+
+    def build_app(self, type: str = "release") -> None:
+        self.ran.append(f"build_app:{type}")
+        self.out.write_text(f"{self.label}:{type}")
+
+
+class TestGroupTasks:
+    """End-to-end execution of tasks registered from class instances."""
+
+    def test_bound_methods_run_with_vars_and_deps(self, tmp_path: Path) -> None:
+        registry = TaskRegistry()
+        group = _Group("win", tmp_path / "app.bin")
+
+        registry(group.build_assets)
+        registry(
+            group.build_app,
+            inputs=[group.build_assets],
+            outputs=[group.out],
+        )
+
+        resolver = VarsResolver(
+            vars_overrides=["type=dev"], targets=["_Group.build_app"]
+        )
+        executor = Executor(registry, vars_resolver=resolver, verbose=False)
+        executor.run("_Group.build_app")
+
+        assert group.ran == ["build_assets", "build_app:dev"]
+        assert group.out.read_text() == "win:dev"
+
+    def test_string_reference_runs_the_referenced_task(self, tmp_path: Path) -> None:
+        registry = TaskRegistry()
+        group = _Group("mac", tmp_path / "app.bin")
+
+        # Forward reference: build_app registered before build_assets exists.
+        registry(group.build_app, inputs=["_Group.build_assets"], outputs=[group.out])
+        registry(group.build_assets)
+        registry.finalize()
+
+        Executor(registry, verbose=False).run("_Group.build_app")
+
+        assert group.ran == ["build_assets", "build_app:release"]
+
+    def test_unresolved_dotted_reference_reports_a_task_ref(self) -> None:
+        registry = TaskRegistry()
+        registry.register(lambda: None, name="build", inputs=["Common.build_assets"])
+        registry.finalize()
+
+        executor = Executor(registry, verbose=False)
+        with pytest.raises(UnproducibleInputError, match="is its group registered"):
+            executor.run("build")
+
+    def test_missing_plain_file_keeps_the_file_message(self) -> None:
+        registry = TaskRegistry()
+        registry.register(lambda: None, name="build", inputs=["src/missing.c"])
+        registry.finalize()
+
+        executor = Executor(registry, verbose=False)
+        with pytest.raises(UnproducibleInputError, match="no task produces it"):
+            executor.run("build")
+
+    def test_instance_owned_digest_is_committed_after_a_run(self) -> None:
+        registry = TaskRegistry()
+        group = _Group("win", Path("unused"))
+
+        registry(group.build_assets, run_if=group.digest)
+
+        executor = Executor(registry, verbose=False)
+        assert executor.run("_Group.build_assets") is True
+        assert group.digest.commits == 1
+
+        # Second run: the predicate now answers False, so no commit.
+        assert Executor(registry, verbose=False).run("_Group.build_assets") is False
+        assert group.digest.commits == 1
+
+    def test_parallel_run_over_one_instance(self, tmp_path: Path) -> None:
+        registry = TaskRegistry()
+        group = _Group("win", tmp_path / "app.bin")
+
+        registry(group.build_assets)
+        registry(group.build_app, inputs=[group.build_assets], outputs=[group.out])
+
+        executor = Executor(registry, parallel=True, verbose=False)
+        executor.run("_Group.build_app")
+
+        assert group.ran == ["build_assets", "build_app:release"]

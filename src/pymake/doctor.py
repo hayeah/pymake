@@ -82,13 +82,13 @@ class Doctor:
                 if not input_path.exists():
                     producing_task = self.registry.by_output(input_path)
                     if not producing_task:
-                        issues.append(
-                            Issue(
-                                "error",
-                                task.name,
-                                f"input '{input_path}' does not exist and no task produces it",
-                            )
+                        # Unresolved "Ns.method" task references get their own
+                        # wording — they are typos or unregistered groups,
+                        # not missing files.
+                        message = task.ref_hint(input_path) or (
+                            f"input '{input_path}' does not exist "
+                            "and no task produces it"
                         )
+                        issues.append(Issue("error", task.name, message))
 
         return issues
-

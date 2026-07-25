@@ -46,12 +46,17 @@ class MissingOutputError(Exception):
 class UnproducibleInputError(Exception):
     """Raised when an input file doesn't exist and no task produces it."""
 
-    def __init__(self, task_name: str, input_path: str) -> None:
+    def __init__(
+        self, task_name: str, input_path: str, message: str | None = None
+    ) -> None:
         self.task_name = task_name
         self.input_path = input_path
         super().__init__(
-            f"Task '{task_name}' requires input '{input_path}' which does not exist "
-            f"and no task produces it"
+            message
+            or (
+                f"Task '{task_name}' requires input '{input_path}' which does not "
+                f"exist and no task produces it"
+            )
         )
 
 
@@ -123,7 +128,13 @@ class Executor:
                     # Check if any task produces this file
                     producing_task = self.registry.by_output(input_path)
                     if not producing_task:
-                        raise UnproducibleInputError(task.name, str(input_path))
+                        # A dotted, separator-free string input is a task
+                        # reference that resolved to nothing — say so.
+                        hint = task.ref_hint(input_path)
+                        message = f"Task '{task.name}': {hint}" if hint else None
+                        raise UnproducibleInputError(
+                            task.name, str(input_path), message
+                        )
 
     def _run_sequential(self, tasks: list[Task]) -> bool:
         """Run tasks sequentially in dependency order."""
