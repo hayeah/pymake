@@ -14,11 +14,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, overload
 
 from .executor import Executor
 from .resolver import DependencyResolver
-from .task import Task, TaskRegistry
+from .task import GroupRegistrar, Task, TaskRegistry, infer_task_name, make_group
 
 if TYPE_CHECKING:
     from rich.console import Console as RichConsole
@@ -46,21 +46,64 @@ class _ContextDecorator:
     def __init__(self, ctx: TaskContext) -> None:
         self._ctx = ctx
 
+    @overload
     def __call__(
         self,
-        inputs: Sequence[str | Path | TaskFunc] = (),
+        fn_or_inputs: TaskFunc,
         outputs: Sequence[str | Path] = (),
         run_if: Callable[[], bool] | None = None,
         run_if_not: Callable[[], bool] | None = None,
         touch: str | Path | None = None,
         *,
+        inputs: Sequence[str | Path | TaskFunc] | None = None,
         name: str | None = None,
-    ) -> Callable[[TaskFunc], TaskFunc]:
+    ) -> Task: ...
+
+    @overload
+    def __call__(
+        self,
+        fn_or_inputs: Sequence[str | Path | TaskFunc] = (),
+        outputs: Sequence[str | Path] = (),
+        run_if: Callable[[], bool] | None = None,
+        run_if_not: Callable[[], bool] | None = None,
+        touch: str | Path | None = None,
+        *,
+        inputs: Sequence[str | Path | TaskFunc] | None = None,
+        name: str | None = None,
+    ) -> Callable[[TaskFunc], TaskFunc]: ...
+
+    def __call__(
+        self,
+        fn_or_inputs: Any = (),
+        outputs: Sequence[str | Path] = (),
+        run_if: Callable[[], bool] | None = None,
+        run_if_not: Callable[[], bool] | None = None,
+        touch: str | Path | None = None,
+        *,
+        inputs: Sequence[str | Path | TaskFunc] | None = None,
+        name: str | None = None,
+    ) -> Any:
+        if callable(fn_or_inputs):
+            func: TaskFunc = fn_or_inputs
+            return self._ctx.register(
+                func,
+                name=name if name is not None else infer_task_name(func),
+                inputs=inputs if inputs is not None else (),
+                outputs=outputs,
+                run_if=run_if,
+                run_if_not=run_if_not,
+                touch=touch,
+            )
+
+        if inputs is not None and fn_or_inputs:
+            raise ValueError("task(): pass inputs positionally or as inputs=, not both")
+        task_inputs = inputs if inputs is not None else fn_or_inputs
+
         def decorator(func: TaskFunc) -> TaskFunc:
             self._ctx.register(
                 func,
                 name=name,
-                inputs=inputs,
+                inputs=task_inputs,
                 outputs=outputs,
                 run_if=run_if,
                 run_if_not=run_if_not,
@@ -69,6 +112,10 @@ class _ContextDecorator:
             return func
 
         return decorator
+
+    def group(self, namespace: str, sep: str = ".") -> GroupRegistrar:
+        """Registrar naming tasks ``<namespace><sep><method>`` in this context."""
+        return make_group(self._ctx, namespace, sep)
 
     def register(
         self,
@@ -165,7 +212,7 @@ class TaskContext:
         if isinstance(target, Task):
             return target
         if callable(target):
-            return self.registry.find_target_or_raise(target.__name__)
+            return self.registry.find_target_or_raise(self.registry.name_of(target))
         return self.registry.find_target_or_raise(target)
 
     def run(
@@ -225,7 +272,9 @@ class TaskContext:
         if isinstance(force_from, Task):
             anchor = force_from
         elif callable(force_from):
-            anchor = self.registry.find_target_or_raise(force_from.__name__)
+            anchor = self.registry.find_target_or_raise(
+                self.registry.name_of(force_from)
+            )
         else:
             anchor = self.registry.find_target_or_raise(force_from)
 
@@ -266,7 +315,7 @@ class TaskContext:
             if isinstance(force_from, Task):
                 anchor_name = force_from.name
             elif callable(force_from):
-                anchor_name = force_from.__name__
+                anchor_name = self.registry.name_of(force_from)
             else:
                 anchor_name = force_from
             anchor = self.registry.find_target_or_raise(anchor_name)

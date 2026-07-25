@@ -325,3 +325,52 @@ class TestIntrospection:
         removed = ctx.clean(make, dry=True)
         assert removed == [tmp_path / "out.txt"]
         assert (tmp_path / "out.txt").exists()
+
+
+class _Pipeline:
+    """A group class used against a disposable context."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.ran: list[str] = []
+
+    def fetch(self) -> None:
+        self.ran.append("fetch")
+        (self.root / "raw.txt").write_text("raw")
+
+    def report(self, loud: bool = False) -> None:
+        self.ran.append("report")
+        text = (self.root / "raw.txt").read_text()
+        (self.root / "report.txt").write_text(text.upper() if loud else text)
+
+
+class TestContextGroups:
+    def test_bare_call_infers_the_group_name(self, tmp_path: Path) -> None:
+        ctx = context(cwd=tmp_path)
+        pipeline = _Pipeline(tmp_path)
+
+        task = ctx.task(pipeline.fetch, outputs=["raw.txt"])
+
+        assert task.name == "_Pipeline.fetch"
+
+    def test_bound_method_dependency_and_run(self, tmp_path: Path) -> None:
+        ctx = context(cwd=tmp_path)
+        pipeline = _Pipeline(tmp_path)
+
+        ctx.task(pipeline.fetch, outputs=["raw.txt"])
+        ctx.task(pipeline.report, inputs=[pipeline.fetch], outputs=["report.txt"])
+        ctx.default(pipeline.report)
+
+        assert ctx.run() is True
+        assert pipeline.ran == ["fetch", "report"]
+        assert ctx.which() == ["_Pipeline.fetch", "_Pipeline.report"]
+
+    def test_group_registrar_names_tasks(self, tmp_path: Path) -> None:
+        ctx = context(cwd=tmp_path)
+        pipeline = _Pipeline(tmp_path)
+
+        group = ctx.task.group(namespace="data", sep="_")
+        task = group.task(pipeline.fetch, outputs=["raw.txt"])
+
+        assert task.name == "data_fetch"
+        assert ctx.which(task) == ["data_fetch"]
