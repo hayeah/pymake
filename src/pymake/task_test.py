@@ -8,6 +8,29 @@ import pytest
 from pymake import Task, TaskRegistry
 
 
+class Common:
+    """A group class: an ordinary class, no pymake import needed."""
+
+    def __init__(self, label: str = "common") -> None:
+        self.label = label
+        self.calls: list[str] = []
+
+    def build_assets(self) -> None:
+        self.calls.append("build_assets")
+
+    def build_app(self, type: str = "release") -> None:
+        """Build the app."""
+        self.calls.append(f"build_app:{type}")
+
+
+class Windows(Common):
+    """Inherits build_app — the runtime class names the group."""
+
+
+def module_level_task() -> None:
+    pass
+
+
 class TestTask:
     def test_is_phony_with_no_outputs(self) -> None:
         task = Task(
@@ -226,3 +249,320 @@ class TestTaskRegistry:
 
         with pytest.raises(ValueError, match=r"\*args/\*\*kwargs not supported"):
             registry.register(build)
+
+
+class TestBareRegistration:
+    def test_bound_method_infers_class_dot_method(self) -> None:
+        registry = TaskRegistry()
+        common = Common()
+
+        task = registry(common.build_app)
+
+        assert task.name == "Common.build_app"
+        assert registry.get("Common.build_app") is task
+        assert task.doc == "Build the app."
+        assert [v.name for v in task.vars] == ["type"]
+
+    def test_inherited_method_uses_runtime_class(self) -> None:
+        registry = TaskRegistry()
+        windows = Windows()
+
+        # build_app is defined on Common; __qualname__ would say "Common".
+        task = registry(windows.build_app)
+
+        assert task.name == "Windows.build_app"
+
+    def test_plain_function_keeps_its_name(self) -> None:
+        registry = TaskRegistry()
+
+        task = registry(module_level_task)
+
+        assert task.name == "module_level_task"
+
+    def test_name_overrides_inference(self) -> None:
+        registry = TaskRegistry()
+        common = Common()
+
+        task = registry(common.build_assets, name="Apple.build_assets")
+
+        assert task.name == "Apple.build_assets"
+
+    def test_lambda_without_name_raises(self) -> None:
+        registry = TaskRegistry()
+
+        with pytest.raises(ValueError, match="lambda"):
+            registry(lambda: None)
+
+    def test_lambda_with_name_registers(self) -> None:
+        registry = TaskRegistry()
+
+        task = registry(lambda: None, name="anonymous")
+
+        assert task.name == "anonymous"
+
+    def test_local_function_without_name_raises(self) -> None:
+        registry = TaskRegistry()
+
+        def local_task() -> None:
+            pass
+
+        with pytest.raises(ValueError, match="local function"):
+            registry(local_task)
+
+    def test_metadata_kwargs_match_the_decorator(self) -> None:
+        registry = TaskRegistry()
+        common = Common()
+        flag = {"ran": False}
+
+        task = registry(
+            common.build_assets,
+            inputs=["in.txt"],
+            outputs=["out.txt"],
+            run_if=lambda: flag["ran"],
+        )
+
+        assert task.inputs == (Path("in.txt"),)
+        assert task.outputs == (Path("out.txt"),)
+        assert task.run_if is not None
+
+    def test_decorator_form_still_works(self) -> None:
+        registry = TaskRegistry()
+
+        @registry(inputs=["in.txt"], outputs=["out.txt"])
+        def build() -> None:
+            pass
+
+        task = registry.get("build")
+        assert task is not None
+        assert task.inputs == (Path("in.txt"),)
+
+    def test_decorator_form_with_positional_inputs(self) -> None:
+        registry = TaskRegistry()
+
+        @registry(["in.txt"], ["out.txt"])
+        def build() -> None:
+            pass
+
+        task = registry.get("build")
+        assert task is not None
+        assert task.inputs == (Path("in.txt"),)
+        assert task.outputs == (Path("out.txt"),)
+
+    def test_decorator_form_rejects_double_inputs(self) -> None:
+        registry = TaskRegistry()
+
+        with pytest.raises(ValueError, match="not both"):
+            registry(["in.txt"], inputs=["other.txt"])
+
+
+class TestGroupRegistrar:
+    def test_dotted_names_by_default(self) -> None:
+        registry = TaskRegistry()
+        common = Common()
+
+        group = registry.group(namespace="Shared")
+        task = group.task(common.build_assets)
+
+        assert task.name == "Shared.build_assets"
+
+    def test_underscore_separator_matches_flat_names(self) -> None:
+        registry = TaskRegistry()
+        windows = Windows()
+
+        group = registry.group(namespace="windows", sep="_")
+        task = group.task(windows.build_app, inputs=["in.txt"])
+
+        assert task.name == "windows_build_app"
+        assert task.inputs == (Path("in.txt"),)
+
+    def test_name_overrides_the_namespace(self) -> None:
+        registry = TaskRegistry()
+        common = Common()
+
+        group = registry.group(namespace="Shared")
+        task = group.task(common.build_assets, name="Apple.build_assets")
+
+        assert task.name == "Apple.build_assets"
+
+    def test_registrar_is_stateless_value_object(self) -> None:
+        registry = TaskRegistry()
+
+        one = registry.group(namespace="Shared")
+        two = registry.group(namespace="Shared")
+
+        one.task(Common().build_assets)
+        two.task(Common().build_app)
+
+        assert {t.name for t in registry.all_tasks()} == {
+            "Shared.build_assets",
+            "Shared.build_app",
+        }
+
+    def test_invalid_separator_raises(self) -> None:
+        registry = TaskRegistry()
+
+        with pytest.raises(ValueError, match="separator"):
+            registry.group(namespace="Shared", sep="-")
+
+    def test_dotted_namespace_raises(self) -> None:
+        registry = TaskRegistry()
+
+        with pytest.raises(ValueError, match="plain identifier"):
+            registry.group(namespace="Shared.sub")
+
+    def test_empty_namespace_raises(self) -> None:
+        registry = TaskRegistry()
+
+        with pytest.raises(ValueError, match="non-empty"):
+            registry.group(namespace="")
+
+    def test_parameterized_group_gets_one_task_per_instance(self) -> None:
+        registry = TaskRegistry()
+        mac_probe = Common("mac")
+        win_probe = Common("win")
+
+        registry.group(namespace="Macos").task(mac_probe.build_assets)
+        registry.group(namespace="Windows").task(win_probe.build_assets)
+
+        mac = registry.get("Macos.build_assets")
+        win = registry.get("Windows.build_assets")
+        assert mac is not None and win is not None
+        assert mac.func.__self__ is mac_probe  # type: ignore[attr-defined]
+        assert win.func.__self__ is win_probe  # type: ignore[attr-defined]
+
+    def test_two_instances_collide_with_a_pointed_message(self) -> None:
+        registry = TaskRegistry()
+
+        registry(Common().build_assets)
+        with pytest.raises(ValueError, match=r"task\.group\(namespace=\.\.\.\)"):
+            registry(Common().build_assets)
+
+
+class TestCallableDependencies:
+    def test_bound_method_dependency_resolves_to_registered_name(self) -> None:
+        registry = TaskRegistry()
+        common = Common()
+
+        registry(common.build_assets)
+        task = registry(common.build_app, inputs=[common.build_assets])
+
+        assert task.depends == ("Common.build_assets",)
+
+    def test_two_instances_of_one_class_stay_distinct(self) -> None:
+        registry = TaskRegistry()
+        mac = Common("mac")
+        win = Common("win")
+
+        registry.group(namespace="Macos").task(mac.build_assets)
+        registry.group(namespace="Windows").task(win.build_assets)
+
+        mac_app = registry.group(namespace="Macos").task(
+            mac.build_app, inputs=[mac.build_assets]
+        )
+        win_app = registry.group(namespace="Windows").task(
+            win.build_app, inputs=[win.build_assets]
+        )
+
+        assert mac_app.depends == ("Macos.build_assets",)
+        assert win_app.depends == ("Windows.build_assets",)
+
+    def test_default_accepts_a_bound_method(self) -> None:
+        registry = TaskRegistry()
+        common = Common()
+
+        registry(common.build_app)
+        registry.default(common.build_app)
+
+        assert registry.default_task() == "Common.build_app"
+
+    def test_default_accepts_a_dotted_string(self) -> None:
+        registry = TaskRegistry()
+        registry(Common().build_app)
+
+        registry.default("Common.build_app")
+
+        assert registry.default_task() == "Common.build_app"
+
+
+class TestStringTaskReferences:
+    def test_forward_reference_resolves_at_finalize(self) -> None:
+        registry = TaskRegistry()
+        common = Common()
+
+        # Registered BEFORE its dependency exists.
+        app = registry(common.build_app, inputs=["Common.build_assets"])
+        assert app.depends == ()
+        assert app.inputs == (Path("Common.build_assets"),)
+
+        registry(common.build_assets)
+        registry.finalize()
+
+        assert app.depends == ("Common.build_assets",)
+        assert app.inputs == ()
+
+    def test_finalize_is_idempotent(self) -> None:
+        registry = TaskRegistry()
+        common = Common()
+
+        registry(common.build_assets)
+        app = registry(common.build_app, inputs=["Common.build_assets"])
+
+        registry.finalize()
+        registry.finalize()
+
+        assert app.depends == ("Common.build_assets",)
+        assert app.inputs == ()
+
+    def test_unmatched_string_stays_a_file_input(self) -> None:
+        registry = TaskRegistry()
+        task = registry.register(lambda: None, name="build", inputs=["src/main.c"])
+
+        registry.finalize()
+
+        assert task.inputs == (Path("src/main.c"),)
+        assert task.depends == ()
+
+    def test_path_input_is_always_a_file(self) -> None:
+        registry = TaskRegistry()
+        common = Common()
+
+        registry(common.build_assets)
+        # Same spelling as the task name, but a Path: never a task reference.
+        task = registry(common.build_app, inputs=[Path("Common.build_assets")])
+
+        registry.finalize()
+
+        assert task.inputs == (Path("Common.build_assets"),)
+        assert task.depends == ()
+
+    def test_self_reference_is_not_a_dependency(self) -> None:
+        registry = TaskRegistry()
+        task = registry.register(lambda: None, name="build", inputs=["build"])
+
+        registry.finalize()
+
+        assert task.depends == ()
+        assert task.inputs == (Path("build"),)
+
+    def test_ref_hint_flags_a_dotted_string_with_no_task(self) -> None:
+        registry = TaskRegistry()
+        task = registry.register(
+            lambda: None, name="build", inputs=["Common.build_assets"]
+        )
+        registry.finalize()
+
+        hint = task.ref_hint(Path("Common.build_assets"))
+        assert hint is not None
+        assert "is its group registered?" in hint
+
+    def test_ref_hint_ignores_ordinary_files(self) -> None:
+        registry = TaskRegistry()
+        task = registry.register(
+            lambda: None, name="build", inputs=["src/main.c", "notes.txt"]
+        )
+        registry.finalize()
+
+        assert task.ref_hint(Path("src/main.c")) is None
+        assert task.ref_hint(Path("notes.txt")) == (
+            "no task and no file named 'notes.txt' — is its group registered?"
+        )
