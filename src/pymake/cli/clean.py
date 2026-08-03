@@ -110,7 +110,9 @@ class CleanCommand:
             self.ctx.console.print("[dim]Dry run - would delete:[/dim]")
             for f in existing_files:
                 self.ctx.console.print(f"  {f}")
-            self.ctx.console.print(f"\n[dim]{len(existing_files)} file(s) would be deleted[/dim]")
+            self.ctx.console.print(
+                f"\n[dim]{len(existing_files)} file(s) would be deleted[/dim]"
+            )
         else:
             for f in existing_files:
                 f.unlink()

@@ -342,3 +342,133 @@ class TestDigestStorage:
 
         d2 = TreeDigest(tmp_path, digest=tmp_path / ".state")
         assert d2.changed() is True
+
+
+# ----------------------------------------------------------------------
+# Deprecation and the severed-wrapper tripwire
+
+
+class TestTreeDigestDeprecation:
+    def test_factory_warns(self, tmp_path: Path) -> None:
+        with pytest.warns(FutureWarning, match="tree_digest is deprecated"):
+            tree_digest(tmp_path, digest=tmp_path / ".digest")
+
+
+class TestSeveredCommitWrapper:
+    """Detection of a run_if that reaches a TreeDigest but exposes no .commit."""
+
+    def _digest(self, tmp_path: Path) -> TreeDigest:
+        src = tmp_path / "src"
+        src.mkdir(exist_ok=True)
+        return TreeDigest(src, digest=tmp_path / ".digest")
+
+    def test_plain_wrapper_closure_is_severed(self, tmp_path: Path) -> None:
+        from pymake.digest import severed_commit_wrapper
+
+        digest = self._digest(tmp_path)
+
+        def should_build() -> bool:
+            return digest.changed() or False
+
+        assert severed_commit_wrapper(should_build) is digest
+
+    def test_wrapper_over_bound_method_is_severed(self, tmp_path: Path) -> None:
+        from pymake.digest import severed_commit_wrapper
+
+        changed = self._digest(tmp_path).changed
+
+        def should_build() -> bool:
+            return changed()
+
+        assert severed_commit_wrapper(should_build) is not None
+
+    def test_partial_is_severed(self, tmp_path: Path) -> None:
+        import functools
+
+        from pymake.digest import severed_commit_wrapper
+
+        digest = self._digest(tmp_path)
+
+        def gate(d: TreeDigest) -> bool:
+            return d.changed()
+
+        assert severed_commit_wrapper(functools.partial(gate, digest)) is digest
+
+    def test_helper_object_holding_a_digest_is_severed(self, tmp_path: Path) -> None:
+        from pymake.digest import severed_commit_wrapper
+
+        digest = self._digest(tmp_path)
+
+        class Gate:
+            def __init__(self, d: TreeDigest) -> None:
+                self.d = d
+
+            def check(self) -> bool:
+                return self.d.changed()
+
+        assert severed_commit_wrapper(Gate(digest).check) is digest
+
+    def test_default_arg_is_severed(self, tmp_path: Path) -> None:
+        from pymake.digest import severed_commit_wrapper
+
+        digest = self._digest(tmp_path)
+
+        def should_build(d: TreeDigest = digest) -> bool:
+            return d.changed()
+
+        assert severed_commit_wrapper(should_build) is digest
+
+    def test_bound_changed_is_not_severed(self, tmp_path: Path) -> None:
+        """digest.changed passed directly: the executor finds .commit."""
+        from pymake.digest import severed_commit_wrapper
+
+        assert severed_commit_wrapper(self._digest(tmp_path).changed) is None
+
+    def test_wrapper_with_commit_reattached_is_not_severed(
+        self, tmp_path: Path
+    ) -> None:
+        from pymake.digest import severed_commit_wrapper
+
+        digest = self._digest(tmp_path)
+
+        def should_build() -> bool:
+            return digest.changed()
+
+        should_build.commit = digest.commit  # type: ignore[attr-defined]
+        assert severed_commit_wrapper(should_build) is None
+
+    def test_plain_predicates_are_not_severed(self, tmp_path: Path) -> None:
+        from pymake.digest import severed_commit_wrapper
+
+        assert severed_commit_wrapper(None) is None
+        assert severed_commit_wrapper(lambda: True) is None
+
+    def test_deeper_indirection_is_not_detected(self, tmp_path: Path) -> None:
+        """Documented limit: only one inspection hop."""
+        from pymake.digest import severed_commit_wrapper
+
+        digest = self._digest(tmp_path)
+
+        def inner() -> bool:
+            return digest.changed()
+
+        def outer() -> bool:  # digest is two hops away
+            return inner()
+
+        # inner is in outer's closure; the digest is inside INNER's closure.
+        # One hop reaches inner but not through it.
+        assert severed_commit_wrapper(outer) is None
+
+    def test_module_global_reference_is_severed(self, tmp_path: Path) -> None:
+        """The canonical Makefile shape: a module-level digest used in a def."""
+        from pymake.digest import severed_commit_wrapper
+
+        digest = self._digest(tmp_path)
+        namespace: dict[str, object] = {"DIGEST": digest}
+        exec(
+            "def should_build():\n    return DIGEST.changed() or False\n",
+            namespace,
+        )
+        fn = namespace["should_build"]
+        assert callable(fn)
+        assert severed_commit_wrapper(fn) is digest

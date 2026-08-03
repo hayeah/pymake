@@ -13,14 +13,17 @@ Directory walking is delegated to :mod:`pymake.lstree`, which gives us
 
 from __future__ import annotations
 
+import functools
 import hashlib
+import warnings
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from pymake.lstree import Query, walk
 
-__all__ = ["TreeDigest", "tree_digest"]
+__all__ = ["TreeDigest", "tree_digest", "severed_commit_wrapper"]
 
 
 def _make_hasher() -> tuple[Any, str]:
@@ -173,10 +176,105 @@ def tree_digest(
     exclude: list[str] | None = None,
     globs: list[str] | None = None,
 ) -> TreeDigest:
-    """Create a :class:`TreeDigest` for the given paths."""
+    """Create a :class:`TreeDigest` for the given paths.
+
+    .. deprecated::
+        Use an Input instead: ``git(id, repo, paths=[...])`` for trees in
+        git (ignore rules and content identity for free), or a custom
+        Input for genuinely un-gitted trees. See
+        ``docs/input-contract-design.md``.
+    """
+    warnings.warn(
+        "tree_digest is deprecated: use inputs=[git(id, repo, paths=[...])] "
+        "(or a custom Input) — the executor records fingerprints itself, "
+        "with no digest file or commit protocol",
+        FutureWarning,
+        stacklevel=2,
+    )
     return TreeDigest(
         *paths,
         digest=digest,
         exclude=exclude,
         globs=globs,
     )
+
+
+def _one_hop_reachable(fn: Callable[..., Any]) -> Iterator[Any]:
+    """Objects reachable from *fn* in one inspection hop.
+
+    Covers the common wrapper shapes: closure cells, referenced module
+    globals (the canonical Makefile shape — a module-level digest used
+    inside a ``def``), ``functools.partial`` (func/args/keywords), argument
+    defaults, and — for bound methods — the instance and its attributes.
+    Bound methods found along the way also yield their ``__self__``.
+    Deeper indirection (a digest returned by a call, doubly nested
+    wrappers) is NOT detected; this is a best-effort migration tripwire,
+    not an analysis pass.
+    """
+
+    def expand(obj: Any) -> Iterator[Any]:
+        yield obj
+        owner = getattr(obj, "__self__", None)
+        if owner is not None:
+            yield owner
+
+    if isinstance(fn, functools.partial):
+        yield from expand(fn.func)
+        for arg in fn.args:
+            yield from expand(arg)
+        for arg in fn.keywords.values():
+            yield from expand(arg)
+        return
+
+    closure = getattr(fn, "__closure__", None)
+    if closure:
+        for cell in closure:
+            try:
+                yield from expand(cell.cell_contents)
+            except ValueError:  # empty cell
+                continue
+
+    code = getattr(fn, "__code__", None)
+    fn_globals = getattr(fn, "__globals__", None)
+    if code is not None and fn_globals is not None:
+        for global_name in code.co_names:
+            if global_name in fn_globals:
+                yield from expand(fn_globals[global_name])
+
+    for default in getattr(fn, "__defaults__", None) or ():
+        yield from expand(default)
+    for default in (getattr(fn, "__kwdefaults__", None) or {}).values():
+        yield from expand(default)
+
+    owner = getattr(fn, "__self__", None)
+    if owner is not None:
+        yield owner
+        try:
+            attrs = vars(owner)
+        except TypeError:
+            attrs = {}
+        for attr_value in attrs.values():
+            yield from expand(attr_value)
+
+
+def severed_commit_wrapper(run_if: Callable[..., Any] | None) -> TreeDigest | None:
+    """Detect the severed-wrapper signature on a legacy ``run_if``.
+
+    The executor discovers a digest's commit half by convention — ``commit``
+    on the callable or its ``__self__``. A plain function wrapping
+    ``digest.changed()`` has neither: the digest file never settles and the
+    task rebuilds forever, silently. Return the reachable
+    :class:`TreeDigest` when *run_if* holds one but exposes no ``commit``;
+    detection limits are those of :func:`_one_hop_reachable`.
+    """
+    if run_if is None:
+        return None
+    if callable(getattr(run_if, "commit", None)):
+        return None
+    owner = getattr(run_if, "__self__", None)
+    if owner is not None and callable(getattr(owner, "commit", None)):
+        return None
+    for candidate in _one_hop_reachable(run_if):
+        if isinstance(candidate, TreeDigest):
+            return candidate
+    return None

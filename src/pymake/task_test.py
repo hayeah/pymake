@@ -566,3 +566,149 @@ class TestStringTaskReferences:
         assert task.ref_hint(Path("notes.txt")) == (
             "no task and no file named 'notes.txt' — is its group registered?"
         )
+
+
+class TestInputObjectRegistration:
+    """Registration-time enforcement of the Input contract (id namespace)."""
+
+    def test_input_objects_are_partitioned_from_paths_and_deps(self) -> None:
+        from pymake import value
+
+        registry = TaskRegistry()
+        registry.register(lambda: None, name="build_native", outputs=["tool.exe"])
+        cfg = value("build-config", "opt=1")
+
+        task = registry.register(
+            lambda: None,
+            name="package",
+            inputs=[cfg, "assets/icon.png", "build_native"],
+        )
+        registry.finalize()
+
+        assert task.input_objects == (cfg,)
+        assert task.inputs == (Path("assets/icon.png"),)
+        assert task.depends == ("build_native",)
+
+    def test_duplicate_id_across_different_objects_errors_with_sites(self) -> None:
+        from pymake import value
+
+        registry = TaskRegistry()
+        a = value("build-config", "one")
+        b = value("build-config", "two")
+        registry.register(lambda: None, name="t1", inputs=[a])
+
+        with pytest.raises(ValueError) as exc:
+            registry.register(lambda: None, name="t2", inputs=[b])
+
+        message = str(exc.value)
+        assert "build-config" in message
+        # Both definition sites are named.
+        assert message.count("task_test.py") == 2
+
+    def test_reusing_one_object_across_tasks_is_fine(self) -> None:
+        from pymake import value
+
+        registry = TaskRegistry()
+        shared = value("build-config", "x")
+        registry.register(lambda: None, name="t1", inputs=[shared])
+        registry.register(lambda: None, name="t2", inputs=[shared])
+
+    def test_missing_id_on_custom_input_is_a_registration_error(self) -> None:
+        class NoId:
+            def fingerprint(self) -> str:
+                return "fp"
+
+        registry = TaskRegistry()
+        with pytest.raises(ValueError, match="missing or empty id"):
+            registry.register(
+                lambda: None,
+                name="t",
+                inputs=[NoId()],  # type: ignore[list-item]
+            )
+
+    def test_empty_id_on_custom_input_is_a_registration_error(self) -> None:
+        class EmptyId:
+            id = ""
+
+            def fingerprint(self) -> str:
+                return "fp"
+
+        registry = TaskRegistry()
+        with pytest.raises(ValueError, match="missing or empty id"):
+            registry.register(lambda: None, name="t", inputs=[EmptyId()])
+
+    def test_unsupported_input_type_errors(self) -> None:
+        registry = TaskRegistry()
+        with pytest.raises(ValueError, match="unsupported input"):
+            registry.register(lambda: None, name="t", inputs=[42])  # type: ignore[list-item]
+
+    def test_id_namespace_does_not_clobber_paths_or_tasks(self) -> None:
+        """A user id can equal a task name or a path with no interference."""
+        from pymake import value
+
+        registry = TaskRegistry()
+        registry.register(lambda: None, name="build_native", outputs=["tool.exe"])
+        same_name = value("build_native", "not the task")
+
+        task = registry.register(
+            lambda: None,
+            name="package",
+            inputs=[same_name, "build_native"],
+        )
+        registry.finalize()
+
+        assert task.input_objects == (same_name,)
+        assert task.depends == ("build_native",)
+
+    def test_clear_resets_the_id_registry(self) -> None:
+        from pymake import value
+
+        registry = TaskRegistry()
+        registry.register(lambda: None, name="t1", inputs=[value("cfg", "one")])
+        registry.clear()
+        # Same id, different object: fine after clear().
+        registry.register(lambda: None, name="t1", inputs=[value("cfg", "two")])
+
+
+class TestRunIfDeprecation:
+    def test_run_if_warns_at_registration(self) -> None:
+        registry = TaskRegistry()
+        with pytest.warns(FutureWarning, match="run_if is deprecated"):
+            registry.register(lambda: None, name="a", run_if=lambda: True)
+
+    def test_run_if_not_warns_at_registration(self) -> None:
+        registry = TaskRegistry()
+        with pytest.warns(FutureWarning, match="run_if_not is deprecated"):
+            registry.register(lambda: None, name="a", run_if_not=lambda: False)
+
+    def test_severed_wrapper_gets_a_hard_warning(self, tmp_path: Path) -> None:
+        from pymake.digest import TreeDigest
+
+        src = tmp_path / "src"
+        src.mkdir()
+        digest = TreeDigest(src, digest=tmp_path / ".digest")
+
+        def should_build() -> bool:
+            return digest.changed() or False
+
+        registry = TaskRegistry()
+        with pytest.warns(UserWarning, match="exposes no .commit"):
+            registry.register(lambda: None, name="build", run_if=should_build)
+
+    def test_direct_bound_changed_does_not_hard_warn(self, tmp_path: Path) -> None:
+        import warnings as warnings_mod
+
+        from pymake.digest import TreeDigest
+
+        src = tmp_path / "src"
+        src.mkdir()
+        digest = TreeDigest(src, digest=tmp_path / ".digest")
+
+        registry = TaskRegistry()
+        with warnings_mod.catch_warnings(record=True) as caught:
+            warnings_mod.simplefilter("always")
+            registry.register(lambda: None, name="build", run_if=digest.changed)
+
+        assert not [w for w in caught if w.category is UserWarning]
+        # The deprecation warning still fires, of course.
+        assert [w for w in caught if w.category is FutureWarning]
