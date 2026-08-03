@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import os
+import warnings
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import UnionType
@@ -27,6 +28,66 @@ SUPPORTED_VAR_TYPES = {str, int, float, bool, Path}
 InputArg = str | Path | Callable[..., None] | Input
 
 GROUP_SEPARATORS = (".", "_")
+
+
+def _external_stacklevel() -> int:
+    """Stacklevel attributing a warning to the first frame outside pymake.
+
+    Registration reaches ``register()`` through several internal shims
+    (decorator, group registrar, context), so a fixed stacklevel cannot
+    point at the Makefile line. Walk out of the package instead.
+    """
+    package_dir = os.path.dirname(os.path.abspath(__file__))
+    frame = inspect.currentframe()
+    if frame is not None:
+        frame = frame.f_back  # the function that will call warnings.warn
+    level = 1
+    while frame is not None:
+        filename = os.path.abspath(frame.f_code.co_filename)
+        if os.path.dirname(filename) != package_dir and not filename.startswith(
+            package_dir + os.sep
+        ):
+            return level
+        frame = frame.f_back
+        level += 1
+    return 1
+
+
+def _warn_legacy_predicates(
+    task_name: str,
+    run_if: Callable[[], bool] | None,
+    run_if_not: Callable[[], bool] | None,
+) -> None:
+    """Deprecation (and severed-wrapper) warnings for run_if predicates."""
+    stacklevel = _external_stacklevel()
+    for param, predicate in (("run_if", run_if), ("run_if_not", run_if_not)):
+        if predicate is None:
+            continue
+        warnings.warn(
+            f"Task '{task_name}': {param} is deprecated — express staleness "
+            "as inputs (value(), git(), or a custom Input), or force with "
+            "'pymake redo' / -B",
+            FutureWarning,
+            stacklevel=stacklevel,
+        )
+
+    # The severed-wrapper signature: a run_if that reaches a TreeDigest but
+    # exposes no .commit. The digest file never settles and the task
+    # rebuilds forever — the exact silent failure the Input contract
+    # retires. Hard warning, every registration.
+    from .digest import severed_commit_wrapper
+
+    digest = severed_commit_wrapper(run_if)
+    if digest is not None:
+        warnings.warn(
+            f"Task '{task_name}': run_if wraps a TreeDigest "
+            f"({digest.digest_path}) but exposes no .commit — the digest "
+            "will never settle and the task will re-run forever. Pass the "
+            "digest's .changed directly, or migrate to "
+            "inputs=[git(...)/value(...)]",
+            UserWarning,
+            stacklevel=stacklevel,
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -364,6 +425,9 @@ class TaskRegistry:
     ) -> Task:
         """Register a task with the given parameters."""
         task_name = name or func.__name__
+
+        if run_if is not None or run_if_not is not None:
+            _warn_legacy_predicates(task_name, run_if, run_if_not)
 
         # Partition inputs into their three namespaces: paths, task
         # dependencies, and Input objects. ``str`` inputs are remembered

@@ -23,6 +23,9 @@ STATE_VERSION = 1
 
 KINDS = ("paths", "deps", "inputs")
 
+#: Default per-task state root, relative to the working directory.
+DEFAULT_STATE_DIR = Path(".pymake") / "state"
+
 
 @dataclasses.dataclass
 class TaskState:

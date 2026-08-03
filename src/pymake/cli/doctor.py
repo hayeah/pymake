@@ -33,7 +33,7 @@ class DoctorCommand:
             target_task = self.ctx.find_target(self.ctx.args.target)
 
         doctor = Doctor(self.ctx.registry)
-        issues = doctor.check_all(target_task)
+        issues = doctor.check_all(target_task, sweep=True)
 
         if not issues:
             self.ctx.console.print("[green]No issues found.[/green]")

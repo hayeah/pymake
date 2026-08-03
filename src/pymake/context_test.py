@@ -137,9 +137,7 @@ class TestRun:
         ctx.run(build, force=True)
         assert runs == ["build", "build"]
 
-    def test_force_from_forces_anchor_and_downstream(
-        self, tmp_path: Path
-    ) -> None:
+    def test_force_from_forces_anchor_and_downstream(self, tmp_path: Path) -> None:
         ctx = context(cwd=tmp_path)
         _write(tmp_path / "src.txt", "src")
         _touch_older(tmp_path / "src.txt", seconds=10.0)

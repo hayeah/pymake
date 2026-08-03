@@ -26,6 +26,11 @@ from .task import Task, TaskRegistry
 #: Human noun for each fingerprint kind, used in decision lines and warnings.
 KIND_NOUNS = {"paths": "path", "deps": "dep", "inputs": "input"}
 
+#: Warn once an input has changed on this many consecutive recorded runs —
+#: the empirical signature of a nondeterministic value or a self-mutating
+#: task.
+FLIP_WARN_THRESHOLD = 3
+
 
 def path_fingerprint(path: Path) -> str:
     """``mtime_ns:size`` of *path*, or ``"missing"``."""

@@ -1037,3 +1037,141 @@ class TestFingerprintStaleness:
         assert set(data["paths"]) == {icon.as_posix()}
         assert set(data["deps"]) == {"build_assets"}
         assert set(data["inputs"]) == {"build-config"}
+
+
+class TestInlineWarnings:
+    """Divergence and nondeterminism warn inline, on the runs that show them."""
+
+    def test_self_mutating_task_warns_and_settles(self, tmp_path: Path) -> None:
+        """A task rewriting its own input diverges (warn) but settles."""
+        src = tmp_path / "notes.txt"
+        src.write_text("v1")
+        runs: list[int] = []
+
+        def make_executor(sink: io.StringIO) -> Executor:
+            registry = TaskRegistry()
+
+            def mutate() -> None:
+                runs.append(1)
+                src.write_text(f"run {len(runs)} content")
+
+            registry.register(
+                mutate, name="build", inputs=[src], touch=tmp_path / ".done"
+            )
+            return Executor(
+                registry, verbose=True, output=sink, state_dir=tmp_path / "state"
+            )
+
+        sink = io.StringIO()
+        make_executor(sink).run("build")
+        assert runs == [1]
+        warning = f"[warn] build: path {src.as_posix()} changed during the run"
+        assert warning in sink.getvalue()
+        assert "redo build" in sink.getvalue()
+
+        # Post-run recording absorbed the self-mutation: next run settles.
+        sink2 = io.StringIO()
+        make_executor(sink2).run("build")
+        assert runs == [1]
+        assert "[skip] build (unchanged)" in sink2.getvalue()
+
+    def test_git_divergence_reports_dirt_sample(self, tmp_path: Path) -> None:
+        """A task dirtying its own git input names the droppings."""
+        import subprocess
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        for args in (
+            ["init", "-q", "-b", "master"],
+            ["config", "user.email", "t@example.com"],
+            ["config", "user.name", "T"],
+        ):
+            subprocess.run(["git", "-C", str(repo), *args], check=True)
+        (repo / "main.c").write_text("v1")
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "c"], check=True)
+
+        from pymake import git
+
+        def leak() -> None:
+            (repo / "droppings.tmp").write_text("junk")
+
+        registry = TaskRegistry()
+        registry.register(
+            leak,
+            name="build",
+            inputs=[git("native-sources", repo)],
+            touch=tmp_path / ".done",
+        )
+
+        sink = io.StringIO()
+        Executor(registry, verbose=True, output=sink, state_dir=tmp_path / "state").run(
+            "build"
+        )
+
+        out = sink.getvalue()
+        assert "[warn] build: input native-sources" in out
+        assert "changed during the run" in out
+        assert "?? droppings.tmp" in out
+
+    def test_flip_counter_warns_at_three(self, tmp_path: Path) -> None:
+        """An input that changes on every run gets named, with its defsite."""
+        flippy = _CountingInput("build-config")
+
+        def run_once(sink: io.StringIO) -> None:
+            registry = TaskRegistry()
+            registry.register(lambda: None, name="build", inputs=[flippy])
+            Executor(
+                registry, verbose=True, output=sink, state_dir=tmp_path / "state"
+            ).run("build")
+
+        warning = (
+            "[warn] build: input build-config has changed on every one of "
+            "the last 3 runs"
+        )
+
+        outputs: list[str] = []
+        for i in range(4):
+            flippy.fp = f"world-state-{i}"  # stable within a run
+            sink = io.StringIO()
+            run_once(sink)
+            outputs.append(sink.getvalue())
+
+        # Runs 1-3: no warning yet (run 1 has no prior record; flips reach
+        # 2 by run 3).
+        assert all(warning not in out for out in outputs[:3])
+        # Run 4: three consecutive changed-since-last-record runs.
+        assert warning in outputs[3]
+        assert "nondeterministic value or self-mutating task?" in outputs[3]
+
+    def test_steady_input_resets_the_flip_counter(self, tmp_path: Path) -> None:
+        flippy = _CountingInput("build-config")
+        out = tmp_path / "out.txt"
+
+        def run_once() -> str:
+            registry = TaskRegistry()
+
+            def build() -> None:
+                out.write_text("x")
+
+            registry.register(build, name="build", inputs=[flippy], outputs=[out])
+            sink = io.StringIO()
+            Executor(
+                registry, verbose=True, output=sink, state_dir=tmp_path / "state"
+            ).run("build")
+            return sink.getvalue()
+
+        # Two flips...
+        for i in range(3):
+            flippy.fp = f"state-{i}"
+            run_once()
+        # ...then the value holds still but the task re-runs for another
+        # reason (missing output): the counter resets.
+        out.unlink()
+        run_once()
+
+        from pymake.state import StateStore
+
+        record = StateStore(tmp_path / "state").load("build")
+        assert record is not None
+        assert record.flip_count("inputs", "build-config") == 0

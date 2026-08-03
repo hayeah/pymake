@@ -72,11 +72,18 @@ class CommandContext:
         return self.registry.find_target_or_raise(target)
 
     def check_before_run(self, target: Task) -> None:
-        """Run doctor check before execution. Exit if issues found."""
+        """Run doctor check before execution. Exit if errors are found.
+
+        Warnings are printed but do not block the run.
+        """
         doctor = Doctor(self.registry)
         issues = doctor.check_all(target)
-        if issues:
-            for issue in issues:
-                self.console.print(f"[red]error[/red]: {issue.task}: {issue.message}")
-            self.console.print(f"\n[red]{len(issues)} error(s)[/red]")
+        errors = [i for i in issues if i.severity == "error"]
+        for issue in issues:
+            color = "red" if issue.severity == "error" else "yellow"
+            self.console.print(
+                f"[{color}]{issue.severity}[/{color}]: {issue.task}: {issue.message}"
+            )
+        if errors:
+            self.console.print(f"\n[red]{len(errors)} error(s)[/red]")
             sys.exit(1)

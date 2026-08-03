@@ -9,20 +9,20 @@ import threading
 from pathlib import Path
 from typing import TextIO
 
+from .inputs import GitInput, input_defsite
 from .resolver import CyclicDependencyError, DependencyResolver
 from .staleness import (
+    FLIP_WARN_THRESHOLD,
+    KIND_NOUNS,
     FingerprintCache,
     Snapshot,
     change_reason,
     diff_record,
     take_snapshot,
 )
-from .state import StateStore, TaskState
+from .state import DEFAULT_STATE_DIR, KINDS, StateStore, TaskState
 from .task import Task, TaskRegistry
 from .vars import VarsResolver
-
-#: Default per-task state root, relative to the working directory.
-DEFAULT_STATE_DIR = Path(".pymake") / "state"
 
 
 @dataclasses.dataclass
@@ -322,10 +322,20 @@ class Executor:
             return Decision(True, change_reason(changes), pre)
         return Decision(False, "unchanged", pre)
 
-    def _record_state(self, task: Task, snap: Snapshot) -> None:
+    def _record_state(
+        self,
+        task: Task,
+        snap: Snapshot,
+        flips: dict[str, dict[str, int]] | None = None,
+    ) -> None:
         self.state.save(
             task.name,
-            TaskState(paths=snap.paths, deps=snap.deps, inputs=snap.inputs),
+            TaskState(
+                paths=snap.paths,
+                deps=snap.deps,
+                inputs=snap.inputs,
+                flips=flips or {},
+            ),
         )
 
     def _record_after_run(self, task: Task, decision: Decision) -> None:
@@ -339,7 +349,85 @@ class Executor:
         if decision.pre is None:
             return
         post = take_snapshot(task, self.registry, self._fingerprints, fresh=True)
-        self._record_state(task, post)
+        self._warn_divergence(task, decision.pre, post)
+        flips = self._flips_after_run(task, post)
+        self._record_state(task, post, flips)
+
+    def _input_site(self, task: Task, kind: str, name: str) -> str:
+        """`` (file:line)`` suffix for an Input object's definition site."""
+        if kind != "inputs":
+            return ""
+        for obj in task.input_objects:
+            if obj.id == name:
+                site = input_defsite(obj)
+                return f" ({site})" if site else ""
+        return ""
+
+    def _warn_divergence(self, task: Task, pre: Snapshot, post: Snapshot) -> None:
+        """Warn inline when an input changed between decision and recording.
+
+        Divergence is the signature of a self-mutating task or of an
+        external edit landing mid-run (the classic make race — post-run
+        recording would absorb it and the next run would silently skip).
+        For git inputs it doubles as an artifact-hygiene report: post-run
+        dirt is precisely "this task dirtied the repo".
+        """
+        for kind in KINDS:
+            pre_map = pre.kind(kind)
+            for name, fp in post.kind(kind).items():
+                if name not in pre_map or pre_map[name] == fp:
+                    continue
+                sample = self._divergence_sample(task, kind, name)
+                self.log(
+                    f"[warn] {task.name}: {KIND_NOUNS[kind]} {name}"
+                    f"{self._input_site(task, kind, name)} changed during the "
+                    f"run — if that was you, run 'pymake redo {task.name}'"
+                    f"{sample}"
+                )
+
+    def _divergence_sample(self, task: Task, kind: str, name: str) -> str:
+        """Sample files for a divergence warning, where the kind has them."""
+        if kind == "paths":
+            return ""  # the name IS the file
+        if kind == "inputs":
+            for obj in task.input_objects:
+                if obj.id == name and isinstance(obj, GitInput):
+                    rows = obj.dirt_rows()
+                    if rows:
+                        shown = ", ".join(repr(r) for r in rows[:3])
+                        more = len(rows) - 3
+                        if more > 0:
+                            shown += f", +{more} more"
+                        return f" (dirt: {shown})"
+        return ""
+
+    def _flips_after_run(self, task: Task, post: Snapshot) -> dict[str, dict[str, int]]:
+        """Advance per-input flip counters against the previous record.
+
+        A counter increments when the input changed since the last record
+        and resets when it held still; crossing the threshold triggers the
+        inline nondeterminism warning. Doctor aggregates the recorded
+        counters across tasks.
+        """
+        old = self.state.load(task.name)
+        flips: dict[str, dict[str, int]] = {}
+        if old is None:
+            return flips
+        for kind in KINDS:
+            old_map = old.fingerprints(kind)
+            for name, fp in post.kind(kind).items():
+                if name not in old_map or old_map[name] == fp:
+                    continue
+                count = old.flip_count(kind, name) + 1
+                flips.setdefault(kind, {})[name] = count
+                if count >= FLIP_WARN_THRESHOLD:
+                    self.log(
+                        f"[warn] {task.name}: {KIND_NOUNS[kind]} {name}"
+                        f"{self._input_site(task, kind, name)} has changed on "
+                        f"every one of the last {count} runs — "
+                        "nondeterministic value or self-mutating task?"
+                    )
+        return flips
 
     def _execute_task(self, task: Task) -> bool:
         """

@@ -668,3 +668,47 @@ class TestInputObjectRegistration:
         registry.clear()
         # Same id, different object: fine after clear().
         registry.register(lambda: None, name="t1", inputs=[value("cfg", "two")])
+
+
+class TestRunIfDeprecation:
+    def test_run_if_warns_at_registration(self) -> None:
+        registry = TaskRegistry()
+        with pytest.warns(FutureWarning, match="run_if is deprecated"):
+            registry.register(lambda: None, name="a", run_if=lambda: True)
+
+    def test_run_if_not_warns_at_registration(self) -> None:
+        registry = TaskRegistry()
+        with pytest.warns(FutureWarning, match="run_if_not is deprecated"):
+            registry.register(lambda: None, name="a", run_if_not=lambda: False)
+
+    def test_severed_wrapper_gets_a_hard_warning(self, tmp_path: Path) -> None:
+        from pymake.digest import TreeDigest
+
+        src = tmp_path / "src"
+        src.mkdir()
+        digest = TreeDigest(src, digest=tmp_path / ".digest")
+
+        def should_build() -> bool:
+            return digest.changed() or False
+
+        registry = TaskRegistry()
+        with pytest.warns(UserWarning, match="exposes no .commit"):
+            registry.register(lambda: None, name="build", run_if=should_build)
+
+    def test_direct_bound_changed_does_not_hard_warn(self, tmp_path: Path) -> None:
+        import warnings as warnings_mod
+
+        from pymake.digest import TreeDigest
+
+        src = tmp_path / "src"
+        src.mkdir()
+        digest = TreeDigest(src, digest=tmp_path / ".digest")
+
+        registry = TaskRegistry()
+        with warnings_mod.catch_warnings(record=True) as caught:
+            warnings_mod.simplefilter("always")
+            registry.register(lambda: None, name="build", run_if=digest.changed)
+
+        assert not [w for w in caught if w.category is UserWarning]
+        # The deprecation warning still fires, of course.
+        assert [w for w in caught if w.category is FutureWarning]
