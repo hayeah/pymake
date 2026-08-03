@@ -18,7 +18,14 @@ from typing import TYPE_CHECKING, Any, overload
 
 from .executor import Executor
 from .resolver import DependencyResolver
-from .task import GroupRegistrar, Task, TaskRegistry, infer_task_name, make_group
+from .task import (
+    GroupRegistrar,
+    InputArg,
+    Task,
+    TaskRegistry,
+    infer_task_name,
+    make_group,
+)
 
 if TYPE_CHECKING:
     from rich.console import Console as RichConsole
@@ -55,20 +62,20 @@ class _ContextDecorator:
         run_if_not: Callable[[], bool] | None = None,
         touch: str | Path | None = None,
         *,
-        inputs: Sequence[str | Path | TaskFunc] | None = None,
+        inputs: Sequence[InputArg] | None = None,
         name: str | None = None,
     ) -> Task: ...
 
     @overload
     def __call__(
         self,
-        fn_or_inputs: Sequence[str | Path | TaskFunc] = (),
+        fn_or_inputs: Sequence[InputArg] = (),
         outputs: Sequence[str | Path] = (),
         run_if: Callable[[], bool] | None = None,
         run_if_not: Callable[[], bool] | None = None,
         touch: str | Path | None = None,
         *,
-        inputs: Sequence[str | Path | TaskFunc] | None = None,
+        inputs: Sequence[InputArg] | None = None,
         name: str | None = None,
     ) -> Callable[[TaskFunc], TaskFunc]: ...
 
@@ -80,7 +87,7 @@ class _ContextDecorator:
         run_if_not: Callable[[], bool] | None = None,
         touch: str | Path | None = None,
         *,
-        inputs: Sequence[str | Path | TaskFunc] | None = None,
+        inputs: Sequence[InputArg] | None = None,
         name: str | None = None,
     ) -> Any:
         if callable(fn_or_inputs):
@@ -122,7 +129,7 @@ class _ContextDecorator:
         func: TaskFunc,
         *,
         name: str | None = None,
-        inputs: Sequence[str | Path | TaskFunc] = (),
+        inputs: Sequence[InputArg] = (),
         outputs: Sequence[str | Path] = (),
         run_if: Callable[[], bool] | None = None,
         run_if_not: Callable[[], bool] | None = None,
@@ -166,18 +173,19 @@ class TaskContext:
         func: TaskFunc,
         *,
         name: str | None = None,
-        inputs: Sequence[str | Path | TaskFunc] = (),
+        inputs: Sequence[InputArg] = (),
         outputs: Sequence[str | Path] = (),
         run_if: Callable[[], bool] | None = None,
         run_if_not: Callable[[], bool] | None = None,
         touch: str | Path | None = None,
     ) -> Task:
-        resolved_inputs: list[str | Path | TaskFunc] = []
+        resolved_inputs: list[InputArg] = []
         for inp in inputs:
-            if callable(inp):
-                resolved_inputs.append(inp)
-            else:
+            if isinstance(inp, (str, Path)):
                 resolved_inputs.append(_resolve(inp, self.cwd))
+            else:
+                # Task callables and Input objects pass through unresolved.
+                resolved_inputs.append(inp)
 
         resolved_outputs = [_resolve(o, self.cwd) for o in outputs]
         resolved_touch: Path | None = (
@@ -240,15 +248,21 @@ class TaskContext:
 
         if dry_run:
             self._print_plan(
-                resolved_target, resolver,
-                force=force, force_from=force_from, console=console,
+                resolved_target,
+                resolver,
+                force=force,
+                force_from=force_from,
+                console=console,
             )
             return False
 
         if force_from is not None:
             return self._run_force_from(
-                resolved_target, force_from,
-                resolver=resolver, parallel=parallel, jobs=jobs,
+                resolved_target,
+                force_from,
+                resolver=resolver,
+                parallel=parallel,
+                jobs=jobs,
             )
 
         use_parallel = parallel or jobs is not None
@@ -352,9 +366,7 @@ class TaskContext:
             return sorted(names)
         return [x.name for x in resolver.resolve(t)]
 
-    def graph(
-        self, target: str | TaskFunc | Task | None = None
-    ) -> str:
+    def graph(self, target: str | TaskFunc | Task | None = None) -> str:
         """Return a DOT graph string for *target* (or the default)."""
         t = self._resolve_target(target)
         return DependencyResolver(self.registry).to_dot(t)

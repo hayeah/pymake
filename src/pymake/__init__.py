@@ -9,6 +9,7 @@ from .executor import (
     MissingOutputError,
     UnproducibleInputError,
 )
+from .inputs import Input, ValueInput, value
 from .resolver import CyclicDependencyError, DependencyResolver
 from .sh import sh
 from .task import Task, TaskRegistry, TaskVar, task
@@ -32,4 +33,7 @@ __all__ = [
     "sh",
     "tree_digest",
     "TreeDigest",
+    "Input",
+    "ValueInput",
+    "value",
 ]

@@ -18,7 +18,13 @@ from typing import (
     overload,
 )
 
+from .inputs import Input, input_defsite, is_input
+
 SUPPORTED_VAR_TYPES = {str, int, float, bool, Path}
+
+# What ``inputs=`` accepts: a path, a task reference (callable or quoted
+# name), or an Input object (id + fingerprint()).
+InputArg = str | Path | Callable[..., None] | Input
 
 GROUP_SEPARATORS = (".", "_")
 
@@ -165,6 +171,7 @@ class Task:
     touch: Path | None = None
     depends: tuple[str, ...] = ()
     string_inputs: tuple[str, ...] = ()
+    input_objects: tuple[Input, ...] = ()
 
     def ref_hint(self, input_path: Path) -> str | None:
         """Diagnose *input_path* as a task reference that resolved to nothing.
@@ -223,7 +230,7 @@ class SupportsRegister(Protocol):
         func: Callable[..., None],
         *,
         name: str | None = ...,
-        inputs: Sequence[str | Path | Callable[..., None]] = ...,
+        inputs: Sequence[InputArg] = ...,
         outputs: Sequence[str | Path] = ...,
         run_if: Callable[[], bool] | None = ...,
         run_if_not: Callable[[], bool] | None = ...,
@@ -253,7 +260,7 @@ class GroupRegistrar:
     def task(
         self,
         func: Callable[..., None],
-        inputs: Sequence[str | Path | Callable[..., None]] = (),
+        inputs: Sequence[InputArg] = (),
         outputs: Sequence[str | Path] = (),
         run_if: Callable[[], bool] | None = None,
         run_if_not: Callable[[], bool] | None = None,
@@ -299,6 +306,10 @@ class TaskRegistry:
         self._output_to_task: dict[Path, str] = {}
         self._default: str | None = None
         self._callable_names: dict[Any, str] = {}
+        # Input-object id registry: id -> (object, definition site). Applies
+        # ONLY to Input objects — paths and task names live in their own
+        # namespaces and never collide with a user id.
+        self._input_ids: dict[str, tuple[Any, str]] = {}
 
     def default(self, name: str | Callable[..., None]) -> None:
         """Set the default task to run when no target is specified.
@@ -345,7 +356,7 @@ class TaskRegistry:
         func: Callable[..., None],
         *,
         name: str | None = None,
-        inputs: Sequence[str | Path | Callable[..., None]] = (),
+        inputs: Sequence[InputArg] = (),
         outputs: Sequence[str | Path] = (),
         run_if: Callable[[], bool] | None = None,
         run_if_not: Callable[[], bool] | None = None,
@@ -354,20 +365,31 @@ class TaskRegistry:
         """Register a task with the given parameters."""
         task_name = name or func.__name__
 
-        # Separate callable inputs (task dependencies) from path inputs.
-        # ``str`` inputs are remembered as-is: finalize() later promotes the
-        # ones that name a registered task to dependencies. ``Path`` inputs
-        # are always files.
+        # Partition inputs into their three namespaces: paths, task
+        # dependencies, and Input objects. ``str`` inputs are remembered
+        # as-is: finalize() later promotes the ones that name a registered
+        # task to dependencies. ``Path`` inputs are always files. Input
+        # objects are detected by capability (a ``fingerprint`` method), so
+        # a fingerprint-bearing object with a broken id fails loudly below
+        # instead of being misread as a task reference.
         input_paths: list[Path] = []
         task_depends: list[str] = []
         string_inputs: list[str] = []
+        raw_input_objects: list[Any] = []
         for inp in inputs:
-            if callable(inp):
-                task_depends.append(self.name_of(inp))
-            else:
+            if isinstance(inp, (str, Path)):
                 if isinstance(inp, str):
                     string_inputs.append(inp)
                 input_paths.append(Path(inp))
+            elif is_input(inp):
+                raw_input_objects.append(inp)
+            elif callable(inp):
+                task_depends.append(self.name_of(inp))
+            else:
+                raise ValueError(
+                    f"Task '{task_name}': unsupported input {inp!r} — expected "
+                    "a path, a task, or an Input object (id + fingerprint())"
+                )
 
         output_paths = tuple(Path(p) for p in outputs)
         touch_path = Path(touch) if touch else None
@@ -388,6 +410,13 @@ class TaskRegistry:
 
         task_vars = vars_from_signature(func)
 
+        if task_name in self._tasks:
+            raise ValueError(self._duplicate_name_message(task_name, func))
+
+        input_objects = tuple(
+            self._checked_input(task_name, obj) for obj in raw_input_objects
+        )
+
         # Create and store task
         task = Task(
             name=task_name,
@@ -401,10 +430,8 @@ class TaskRegistry:
             touch=touch_path,
             depends=tuple(task_depends),
             string_inputs=tuple(string_inputs),
+            input_objects=input_objects,
         )
-
-        if task_name in self._tasks:
-            raise ValueError(self._duplicate_name_message(task_name, func))
 
         self._tasks[task_name] = task
         self._remember_callable(func, task_name)
@@ -414,6 +441,33 @@ class TaskRegistry:
             self._output_to_task[out.resolve()] = task_name
 
         return task
+
+    def _checked_input(self, task_name: str, obj: Any) -> Input:
+        """Enforce the id contract on *obj* at registration, fail loud.
+
+        A missing/empty id is a registration error. Two DIFFERENT Input
+        objects claiming the same id is a registration error naming both
+        definition sites. Reusing ONE object across tasks is fine — the id
+        then names the shared thing.
+        """
+        input_id = getattr(obj, "id", None)
+        where = input_defsite(obj) or repr(obj)
+        if not isinstance(input_id, str) or not input_id:
+            raise ValueError(
+                f"Task '{task_name}': input {obj!r} has a missing or empty id "
+                "— the id is the first argument of every input constructor "
+                f"(defined at {where})"
+            )
+        existing = self._input_ids.get(input_id)
+        if existing is not None and existing[0] is not obj:
+            raise ValueError(
+                f"Input id '{input_id}' is claimed by two different inputs: "
+                f"{existing[1]} and {where}. Reuse ONE object to share an "
+                "input across tasks, or give each input its own id."
+            )
+        self._input_ids[input_id] = (obj, where)
+        result: Input = obj
+        return result
 
     def _duplicate_name_message(self, task_name: str, func: Callable[..., Any]) -> str:
         message = f"Task '{task_name}' is already registered."
@@ -476,20 +530,20 @@ class TaskRegistry:
         run_if_not: Callable[[], bool] | None = None,
         touch: str | Path | None = None,
         *,
-        inputs: Sequence[str | Path | Callable[..., None]] | None = None,
+        inputs: Sequence[InputArg] | None = None,
         name: str | None = None,
     ) -> Task: ...
 
     @overload
     def __call__(
         self,
-        fn_or_inputs: Sequence[str | Path | Callable[..., None]] = (),
+        fn_or_inputs: Sequence[InputArg] = (),
         outputs: Sequence[str | Path] = (),
         run_if: Callable[[], bool] | None = None,
         run_if_not: Callable[[], bool] | None = None,
         touch: str | Path | None = None,
         *,
-        inputs: Sequence[str | Path | Callable[..., None]] | None = None,
+        inputs: Sequence[InputArg] | None = None,
         name: str | None = None,
     ) -> Callable[[Callable[..., None]], Callable[..., None]]: ...
 
@@ -501,7 +555,7 @@ class TaskRegistry:
         run_if_not: Callable[[], bool] | None = None,
         touch: str | Path | None = None,
         *,
-        inputs: Sequence[str | Path | Callable[..., None]] | None = None,
+        inputs: Sequence[InputArg] | None = None,
         name: str | None = None,
     ) -> Any:
         """Register a task, either bare or as a decorator.
@@ -585,6 +639,7 @@ class TaskRegistry:
         self._tasks.clear()
         self._output_to_task.clear()
         self._callable_names.clear()
+        self._input_ids.clear()
         self._default = None
 
 
