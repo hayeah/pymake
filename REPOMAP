@@ -63,9 +63,14 @@ task.default(all)  # set default task
 
 ## Execution
 
-**Files:** `src/taskpy/executor.py`, `src/taskpy/resolver.py`
+**Files:** `src/taskpy/executor.py`, `src/taskpy/resolver.py`,
+`src/pymake/staleness.py`, `src/pymake/state.py`, `src/pymake/inputs.py`
 
-Task runs if: force flag | phony (no outputs) | output missing | input newer than output
+Staleness: `run = cli_force or fingerprints_changed or outputs_missing or
+no_record`, over per-task records in `.pymake/state/<task>.json`
+(kind-partitioned: paths / deps / inputs). Legacy tasks without Input
+objects keep phony-always-run and a one-time mtime fallback. See
+`docs/input-contract-design.md`.
 
 Validation errors:
 - `UnproducibleInputError` - input doesn't exist and no task produces it
@@ -73,8 +78,11 @@ Validation errors:
 - `MissingOutputError` - output not created after task runs
 
 **Classes:**
-- `Executor` - runs tasks (sequential/parallel), handles run_if conditions
+- `Executor` - runs tasks (sequential/parallel), decides + records staleness
 - `DependencyResolver` - topological sort, cycle detection, DOT graph generation
+- `Input` protocol (`inputs.py`) - `id` + `fingerprint()`; built-ins
+  `value(id, x)` and `git(id, repo, ref=None, paths=[...])`
+- `StateStore` / `TaskState` (`state.py`) - atomic per-task fingerprint records
 
 ---
 

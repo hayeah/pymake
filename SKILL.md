@@ -464,24 +464,46 @@ for src in Path("src").glob("*.c"):
 
 ## Execution Semantics
 
-A task runs if **any** of these conditions are true (checked in order):
+Staleness is one rule over recorded **fingerprints**:
 
-1. **Force flag**: `-B` or `--force` was specified
-2. **Phony target**: Task has no outputs (and no `touch` file)
-3. **Missing output**: Any output file does not exist
-4. **Stale output**: Any input file is newer than the oldest output file
+```
+run = cli_force or fingerprints_changed or outputs_missing or no_record
+```
 
-A task is **skipped** if:
+After a successful run the executor re-walks every input fresh and records
+the fingerprints in a per-task state file under `.pymake/state/` (gitignore
+`.pymake/`; the directory is safe to `rm -rf` — the only cost is one
+rebuild). Every `[run]`/`[skip]` line says why:
 
-- All outputs exist AND no inputs are defined (nothing to compare)
-- All outputs exist AND all inputs are older than the oldest output
-- `run_if` callback returns `False` (checked after file conditions)
+```
+[run] build_native (input native-sources changed)
+[run] package (dep build_native outputs changed)
+[run] deploy (path assets/icon.png changed)
+[run] build_native (forced)
+[skip] build_native (unchanged)
+```
 
-### Timestamp comparison
+Fingerprints are kind-partitioned into three namespaces:
 
-When comparing timestamps:
-- pymake uses the **oldest** output file's mtime
-- If **any** input is newer than this, the task runs
+- **paths** — declared file inputs, fingerprint `mtime_ns:size`.
+- **deps** — task dependencies. A dep also **contributes its declared
+  outputs' fingerprints** to the consumer, so a packaging task re-runs when
+  the built binary actually changed, without hand-listing its path twice.
+- **inputs** — Input objects (below), recorded by id.
+
+Legacy semantics are preserved for tasks that use no Input objects:
+
+- A task with **no outputs** (and no `touch` file) is phony and always runs
+  (a task with an Input object and no outputs is instead gated by its
+  record — the state file is the marker).
+- A task with outputs but **no fingerprint record yet** falls back to the
+  historical mtime comparison once, and a record is bootstrapped either
+  way — existing Makefiles migrate onto fingerprints transparently, with
+  no mass rebuild.
+- A task with outputs and nothing to fingerprint (no inputs at all) runs
+  only when an output is missing, exactly as before.
+- `run_if` / `run_if_not` still gate after the staleness check (with a
+  deprecation warning).
 
 ### Input/Output validation
 
@@ -493,7 +515,116 @@ pymake enforces strict validation of input and output files:
 
 3. **After task execution**: All declared output files must exist after the task completes (excluding `touch` files, which are created automatically by pymake).
 
+## Inputs with Fingerprints: the Input Contract
+
+Any dependency of a task is an **input with a fingerprint**; the executor
+owns comparing and recording fingerprints. Besides paths and task refs,
+`inputs=` accepts any object satisfying:
+
+```python
+class Input(Protocol):
+    id: str                               # REQUIRED: globally unique, greppable
+    def fingerprint(self) -> str:
+        """Cheap, stable identity of the input's CURRENT state."""
+```
+
+The `id` is the **first positional argument** of every input constructor —
+grep the id from a decision line and land on exactly one definition site.
+A missing/empty id, or two different Input objects claiming one id, is a
+registration error naming the definition sites (constructors capture their
+caller's `file:line`). Reusing ONE object across tasks is fine — records
+stay per-task, so one task running never satisfies another's staleness;
+only the fingerprint computation is shared (once per id per invocation).
+
+An input must be an **idempotent read of world state** — same world, same
+fingerprint. Clock, randomness, and counters are parameters a task
+computes when it runs, never inputs.
+
+### Built-in inputs
+
+```python
+from pymake import task, value, git
+
+CONFIG = {"optimize": True, "target": "x86_64"}
+
+@task(
+    inputs=[
+        git("native-sources", ".", paths=["Cargo.toml", "core", "cli"]),
+        value("build-config", CONFIG),
+    ],
+    outputs=["build/tool.exe"],
+)
+def build_native():
+    """Rebuild when the scoped tree or the config actually changed."""
+    sh("cargo build --release")
+```
+
+- `value(id, x)` — fingerprint = stable hash of a Python value
+  (str/bytes/JSON-able). Config state becomes a first-class input; no more
+  serializing config to a file purely for mtime visibility.
+- `git(id, repo, ref=None, paths=[...])` — the git-backed tree input:
+  - **Clean** tree: no filesystem walk — the fingerprint is the resolved
+    commit id, or the scoped tree hashes when `paths=` narrows it (commits
+    that don't touch the scope don't retrigger). A vendored tree with
+    thousands of files costs one `rev-parse`.
+  - **Dirty** tree: `git status --porcelain -- <paths>` rows plus each
+    dirty file's `(mtime, size)` — edits retrigger while dirty; returning
+    to clean settles back. Untracked files count as dirt; `.gitignore`
+    carve-outs are inherited, so `target/`-style build residue never
+    enters the fingerprint and there is no exclude list to maintain.
+  - `paths=` entries are git pathspecs — `:(glob)ui/**/*.ts` does suffix
+    filtering.
+  - `ref="master"` pins a branch: the fingerprint follows the branch tip
+    (another repo's published state; working-tree dirt does not count).
+- There is deliberately **no `glob` built-in**: a raw filesystem glob walks
+  whatever is on disk unless every Makefile re-discovers the right
+  exclusions. Anything worth globbing is in git — use `git` with `paths=`.
+  For a genuinely un-gitted tree, write a custom Input:
+
+```python
+class DirSize:
+    def __init__(self, id: str, root: Path) -> None:
+        self.id = id
+        self.root = root
+
+    def fingerprint(self) -> str:
+        return str(sum(f.stat().st_size for f in self.root.rglob("*")))
+```
+
+### Inline warnings
+
+- **Divergence** — an input changed between the pre-run check and the
+  post-run recording: `[warn] build: input native-sources changed during
+  the run — if that was you, run 'pymake redo build'`. This is the
+  signature of a self-mutating task or an external mid-run edit; for `git`
+  inputs the warning lists the new dirt (an artifact-hygiene scan).
+- **Nondeterminism** — a per-input flip counter in the state file
+  increments each recorded run where the input changed and resets when it
+  holds still; at 3 consecutive changes the executor warns inline
+  (`nondeterministic value or self-mutating task?`). `pymake doctor`
+  aggregates the counters across tasks and also scans for `run_if`
+  wrappers that hold a `TreeDigest` but expose no `.commit` (the
+  severed-wrapper bug: the digest never settles and the task re-runs
+  forever).
+
+### Migrating from run_if / tree_digest
+
+- Data gates ("rebuild when this config slice changes") → a `value(...)`
+  input.
+- `tree_digest(...)` gates → a `git(id, repo, paths=[...])` input; delete
+  the digest file, the exclude list, and the `touch=` marker (for tasks
+  with Input objects the state record is the marker).
+- Structural gates ("this task exists only on one platform") → separate
+  task registrations.
+- Always-rebuild policy ("a release cut must not reuse a cached artifact")
+  → the CALLER forces: `pymake -B <task>` or `pymake redo <target>
+  [--only]`. Forced runs record fingerprints normally, so a forced build
+  settles state and the next ordinary run skips.
+
 ## Custom Conditions
+
+**Deprecated:** `run_if` / `run_if_not` registration now emits a
+deprecation warning — see the Input contract above for the replacements.
 
 Use `run_if` for additional conditions after dependency checks:
 
@@ -521,6 +652,11 @@ def local_only():
 `--force` / `-B` bypasses both `run_if` and `run_if_not` (force means force).
 
 ## Directory Change Detection: `tree_digest`
+
+**Deprecated:** prefer `inputs=[git(id, repo, paths=[...])]` (or a custom
+Input) — the executor records fingerprints itself, with no digest file and
+no commit protocol to sever. `tree_digest` keeps working through the
+transition, with a deprecation warning.
 
 `tree_digest` fingerprints a set of files/directories via mtime+size (the
 rsync trick) and persists the fingerprint to a caller-specified digest file.
@@ -663,7 +799,10 @@ pymake doctor build        # Check only tasks needed for 'build'
 ```
 
 Reports cyclic dependencies, inputs that don't exist and no task produces, and
-string task references (`"Ns.method"`) that match no task and no file.
+string task references (`"Ns.method"`) that match no task and no file. The
+doctor command also runs the repo-wide sweeps: flip-counter aggregation
+(inputs that changed on every recent recorded run — nondeterminism) and the
+severed-wrapper scan (`run_if` reaching a `TreeDigest` with no `.commit`).
 
 ### clean command
 
@@ -760,6 +899,9 @@ See `example/hello_context.py` for a runnable demo.
 
 - Cyclic dependencies are detected and reported
 - Duplicate output files across tasks raise an error
+- An Input object with a missing/empty `id` raises at registration; two
+  different Input objects claiming one id raise an error naming both
+  definition sites
 - Duplicate task names raise an error; when two instances of one class infer
   the same name, the message points at `task.group(namespace=...)`
 - An unresolved `"Ns.method"` string input is reported as a missing task

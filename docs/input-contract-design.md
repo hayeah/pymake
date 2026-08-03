@@ -272,3 +272,63 @@ deprecation warnings pointing at their replacements.
   would ping-pong.
 - `git` in repos with submodules: `status --porcelain` covers the outer
   repo; decide whether submodule pointer changes count as dirt.
+
+## As implemented (deviations and precisions)
+
+Everything above is implemented; the deltas, where the code had to make a
+call the spec left open (or where compatibility forced one):
+
+- **`git` with `paths=` drops the commit id from the fingerprint.** The
+  spec reads "the resolved commit id (plus the scoped tree hash …)";
+  implemented as: unscoped → commit id, scoped → the scoped tree hashes
+  ONLY. Including the commit id would retrigger on every commit anywhere
+  in the repo, defeating the scope's purpose (don't rebuild natives when
+  docs change). Same for `ref=` + `paths=`: the task follows the branch's
+  *scoped content*, not every commit on the branch.
+- **Pathspec scoping falls back to `git log -1`.** `rev-parse
+  <commit>:<path>` cannot address pathspec magic (`:(glob)ui/**/*.ts`);
+  such paths resolve to the last commit touching the pathspec instead —
+  same identity semantics, one extra subprocess.
+- **Legacy compatibility matrix** (tasks with NO Input objects keep their
+  historical semantics — the formula governs tasks that opt into inputs):
+  - No outputs and no Input objects → phony, always runs. (A task WITH an
+    Input object and no outputs is gated by its record; the state file is
+    the marker, as the digest file used to be.)
+  - Outputs but no record yet → one-time fallback to the mtime rule, and
+    the record is bootstrapped on the skip path too — existing Makefiles
+    migrate onto fingerprint records with no mass rebuild.
+  - Outputs and nothing fingerprintable at all → outputs-missing check
+    only, never recorded (identical to historical behavior).
+  - `run_if` still evaluates AFTER the staleness check, as before; the
+    documented ordering trap is preserved rather than silently reordered,
+    since run_if is deprecated wholesale.
+- **`touch=` does not warn.** The compatibility section says tree_digest,
+  run_if, and touch= all deprecation-warn; only `tree_digest()` and
+  `run_if`/`run_if_not` do. For legacy path-input tasks `touch=` remains
+  the only output marker (phony tasks always run), so there is no working
+  replacement to point at short of adopting Input objects — warning on it
+  would nag with no migration. Tasks with Input objects simply no longer
+  need it.
+- **Divergence sample files** are provided where the kind has them: for
+  `paths` the name IS the file; for `git` inputs the warning appends up to
+  three current porcelain rows (re-scanned at warn time, so it reports
+  present dirt rather than a strict pre/post set difference). `value` and
+  custom inputs have no file sample.
+- **Severed-wrapper detection is one inspection hop**: closure cells,
+  referenced module globals (the canonical Makefile shape), `partial`
+  func/args/keywords, argument defaults, and a bound method's instance
+  attributes. A digest behind deeper indirection (returned by a call,
+  nested two wrappers down) is not detected — best-effort tripwire, not an
+  analysis pass.
+- **State format versioning is minimal**: state files carry `"version": 1`;
+  any mismatch (or corrupt file) reads as "no record" and the task re-runs
+  and re-records. The loud "state format v2 — full rebuild" banner remains
+  an open question.
+- **Flip counters warn at N=3**, at recording time (so the warning
+  accompanies the run that exhibits the flip); `pymake doctor` aggregates
+  recorded counters and runs the severed-wrapper sweep. The pre-run check
+  before `run`/`redo` stays errors-only (warnings print but never block).
+- **`pymake which` / dry-run plans still use the legacy mtime heuristic**
+  for their would-run markers; the executor's decision lines are the
+  authoritative account. Folding the fingerprint decision into the
+  planners is future work.
