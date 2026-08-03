@@ -676,3 +676,364 @@ class TestGroupTasks:
         executor.run("_Group.build_app")
 
         assert group.ran == ["build_assets", "build_app:release"]
+
+
+class _CountingInput:
+    """Custom Input (id + fingerprint) with a controllable fingerprint."""
+
+    def __init__(self, id: str, fp: str = "one") -> None:
+        self.id = id
+        self.fp = fp
+        self.calls = 0
+
+    def fingerprint(self) -> str:
+        self.calls += 1
+        return self.fp
+
+
+class TestFingerprintStaleness:
+    """The single staleness rule over per-task fingerprint records."""
+
+    def _executor(
+        self, registry: TaskRegistry, tmp_path: Path, **kw: object
+    ) -> Executor:
+        return Executor(registry, verbose=False, state_dir=tmp_path / "state", **kw)  # type: ignore[arg-type]
+
+    def test_value_input_gates_an_outputless_task(self, tmp_path: Path) -> None:
+        from pymake import value
+
+        runs: list[int] = []
+        config = {"opt": False}
+        cfg = value("build-config", config)
+
+        def make_registry() -> TaskRegistry:
+            registry = TaskRegistry()
+            registry.register(lambda: runs.append(1), name="build", inputs=[cfg])
+            return registry
+
+        # First run: no record.
+        self._executor(make_registry(), tmp_path).run("build")
+        assert len(runs) == 1
+
+        # Second invocation: unchanged value — the state file is the marker.
+        self._executor(make_registry(), tmp_path).run("build")
+        assert len(runs) == 1
+
+        # Value changes: re-run.
+        config["opt"] = True
+        self._executor(make_registry(), tmp_path).run("build")
+        assert len(runs) == 2
+
+    def test_no_record_runs_even_when_outputs_look_fresh(self, tmp_path: Path) -> None:
+        from pymake import value
+
+        out = tmp_path / "tool.exe"
+        out.write_text("stale binary")
+        runs: list[int] = []
+
+        registry = TaskRegistry()
+        registry.register(
+            lambda: runs.append(1),
+            name="build_native",
+            inputs=[value("native-cfg", "x")],
+            outputs=[out],
+        )
+
+        self._executor(registry, tmp_path).run("build_native")
+        assert runs == [1]
+
+    def test_missing_output_reruns(self, tmp_path: Path) -> None:
+        from pymake import value
+
+        out = tmp_path / "tool.exe"
+        runs: list[int] = []
+
+        def build() -> None:
+            runs.append(1)
+            out.write_text("bin")
+
+        def make_registry() -> TaskRegistry:
+            registry = TaskRegistry()
+            registry.register(
+                build, name="build", inputs=[value("cfg", "x")], outputs=[out]
+            )
+            return registry
+
+        self._executor(make_registry(), tmp_path).run("build")
+        self._executor(make_registry(), tmp_path).run("build")
+        assert len(runs) == 1  # settled
+
+        out.unlink()
+        self._executor(make_registry(), tmp_path).run("build")
+        assert len(runs) == 2
+
+    def test_forced_runs_record_fingerprints_normally(self, tmp_path: Path) -> None:
+        from pymake import value
+
+        runs: list[int] = []
+
+        def make_registry() -> TaskRegistry:
+            registry = TaskRegistry()
+            registry.register(
+                lambda: runs.append(1), name="build", inputs=[value("cfg", "x")]
+            )
+            return registry
+
+        # Forced first run records state...
+        self._executor(make_registry(), tmp_path, force=True).run("build")
+        assert len(runs) == 1
+        # ...so the next ordinary run skips.
+        self._executor(make_registry(), tmp_path).run("build")
+        assert len(runs) == 1
+
+    def test_records_are_per_task_not_per_input(self, tmp_path: Path) -> None:
+        """Task A running must not settle a shared input for task B."""
+        shared = _CountingInput("shared-tree")
+        runs: list[str] = []
+
+        registry = TaskRegistry()
+        registry.register(lambda: runs.append("a"), name="a", inputs=[shared])
+        registry.register(lambda: runs.append("b"), name="b", inputs=[shared])
+
+        # Run ONLY task a.
+        self._executor(registry, tmp_path).run("a")
+        assert runs == ["a"]
+
+        # A fresh invocation running b: b has no record and must run,
+        # even though a's run recorded the same input id.
+        registry2 = TaskRegistry()
+        registry2.register(lambda: runs.append("a"), name="a", inputs=[shared])
+        registry2.register(lambda: runs.append("b"), name="b", inputs=[shared])
+        self._executor(registry2, tmp_path).run("b")
+        assert runs == ["a", "b"]
+
+    def test_fingerprint_computed_once_per_run_for_shared_inputs(
+        self, tmp_path: Path
+    ) -> None:
+        shared = _CountingInput("shared-tree")
+
+        def make_registry() -> TaskRegistry:
+            registry = TaskRegistry()
+            registry.register(lambda: None, name="a", inputs=[shared])
+            registry.register(lambda: None, name="b", inputs=[shared, "a"])
+            registry.finalize()
+            return registry
+
+        # Settle both tasks.
+        self._executor(make_registry(), tmp_path).run("b")
+
+        # Steady-state invocation: both tasks skip; ONE walk serves both.
+        shared.calls = 0
+        self._executor(make_registry(), tmp_path).run("b")
+        assert shared.calls == 1
+
+    def test_dep_outputs_contribution(self, tmp_path: Path) -> None:
+        """A consumer re-runs when its dep's declared outputs changed."""
+        src = tmp_path / "src.txt"
+        src.write_text("v1")
+        out = tmp_path / "tool.exe"
+        pkg = tmp_path / "pkg.txt"
+        runs: list[str] = []
+
+        def make_registry() -> TaskRegistry:
+            registry = TaskRegistry()
+
+            def build() -> None:
+                runs.append("build")
+                out.write_text(f"bin:{src.read_text()}")
+
+            def package() -> None:
+                runs.append("package")
+                pkg.write_text(f"pkg:{out.read_text()}")
+
+            build_task = registry.register(build, inputs=[src], outputs=[out])
+            registry.register(
+                package, name="package", inputs=[build_task.func], outputs=[pkg]
+            )
+            return registry
+
+        self._executor(make_registry(), tmp_path).run("package")
+        assert runs == ["build", "package"]
+
+        # Nothing changed: both settle.
+        self._executor(make_registry(), tmp_path).run("package")
+        assert runs == ["build", "package"]
+
+        # Source edit: build re-links, and package SEES the fresh binary
+        # through the dep edge — no hand-listed path needed.
+        src.write_text("v2 with longer content")
+        self._executor(make_registry(), tmp_path).run("package")
+        assert runs == ["build", "package", "build", "package"]
+
+    def test_decision_lines_say_why(self, tmp_path: Path) -> None:
+        from pymake import value
+
+        icon = tmp_path / "icon.png"
+        icon.write_text("png")
+        config = {"opt": False}
+        runs: list[int] = []
+
+        def make_executor(out: io.StringIO) -> Executor:
+            registry = TaskRegistry()
+            registry.register(
+                lambda: runs.append(1),
+                name="build_native",
+                inputs=[value("build-config", config), icon],
+            )
+            return Executor(
+                registry, verbose=True, output=out, state_dir=tmp_path / "state"
+            )
+
+        out1 = io.StringIO()
+        make_executor(out1).run("build_native")
+        assert "[run] build_native (no record)" in out1.getvalue()
+
+        out2 = io.StringIO()
+        make_executor(out2).run("build_native")
+        assert "[skip] build_native (unchanged)" in out2.getvalue()
+
+        config["opt"] = True
+        out3 = io.StringIO()
+        make_executor(out3).run("build_native")
+        assert "[run] build_native (input build-config changed)" in out3.getvalue()
+
+        import time
+
+        time.sleep(0.01)
+        icon.write_text("png2")
+        out4 = io.StringIO()
+        make_executor(out4).run("build_native")
+        assert f"[run] build_native (path {icon.as_posix()} changed)" in out4.getvalue()
+
+        out5 = io.StringIO()
+        registry = TaskRegistry()
+        registry.register(
+            lambda: runs.append(1),
+            name="build_native",
+            inputs=[value("build-config", config), icon],
+        )
+        Executor(
+            registry,
+            verbose=True,
+            output=out5,
+            force=True,
+            state_dir=tmp_path / "state",
+        ).run("build_native")
+        assert "[run] build_native (forced)" in out5.getvalue()
+
+    def test_dep_change_names_the_dep(self, tmp_path: Path) -> None:
+        src = tmp_path / "src.txt"
+        src.write_text("v1")
+        out = tmp_path / "tool.exe"
+        pkg = tmp_path / "pkg.txt"
+
+        def make_executor(sink: io.StringIO) -> Executor:
+            registry = TaskRegistry()
+
+            def build() -> None:
+                out.write_text(f"bin:{src.read_text()}")
+
+            def package() -> None:
+                pkg.write_text("pkg")
+
+            registry.register(build, name="build_native", inputs=[src], outputs=[out])
+            registry.register(
+                package, name="package", inputs=["build_native"], outputs=[pkg]
+            )
+            registry.finalize()
+            return Executor(
+                registry, verbose=True, output=sink, state_dir=tmp_path / "state"
+            )
+
+        make_executor(io.StringIO()).run("package")
+        src.write_text("v2 with longer content")
+        sink = io.StringIO()
+        make_executor(sink).run("package")
+        assert "[run] package (dep build_native outputs changed)" in sink.getvalue()
+
+    def test_legacy_task_bootstraps_a_record_on_skip(self, tmp_path: Path) -> None:
+        """Fresh-by-mtime legacy tasks skip once, then live on fingerprints."""
+        import time
+
+        src = tmp_path / "src.txt"
+        src.write_text("v1")
+        time.sleep(0.01)
+        out = tmp_path / "out.txt"
+        out.write_text("built")  # output newer than input: fresh by mtime
+        runs: list[int] = []
+
+        def make_registry() -> TaskRegistry:
+            registry = TaskRegistry()
+            registry.register(
+                lambda: runs.append(1), name="build", inputs=[src], outputs=[out]
+            )
+            return registry
+
+        sink = io.StringIO()
+        registry = make_registry()
+        Executor(registry, verbose=True, output=sink, state_dir=tmp_path / "state").run(
+            "build"
+        )
+        assert runs == []
+        assert "[skip] build (up to date)" in sink.getvalue()
+        # The skip bootstrapped a fingerprint record.
+        assert (tmp_path / "state").exists()
+
+        # An edit that mtime staleness would MISS (backdated mtime, same
+        # size is avoided by changing length) now triggers via fingerprints.
+        src.write_text("v2 much longer than before")
+        st = src.stat()
+        os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns - 10_000_000_000))
+        self._executor(make_registry(), tmp_path).run("build")
+        assert runs == [1]
+
+    def test_legacy_phony_tasks_still_always_run(self, tmp_path: Path) -> None:
+        src = tmp_path / "src.txt"
+        src.write_text("x")
+        runs: list[str] = []
+
+        def make_registry() -> TaskRegistry:
+            registry = TaskRegistry()
+            registry.register(lambda: runs.append("lint"), name="lint")
+            registry.register(lambda: runs.append("test"), name="test", inputs=[src])
+            return registry
+
+        for _ in range(2):
+            executor = self._executor(make_registry(), tmp_path)
+            executor.run("lint")
+            executor.run("test")
+
+        # Phony semantics preserved: both ran both times, input change or not.
+        assert runs == ["lint", "test", "lint", "test"]
+
+    def test_state_file_is_kind_partitioned(self, tmp_path: Path) -> None:
+        import json
+
+        from pymake import value
+
+        icon = tmp_path / "icon.png"
+        icon.write_text("png")
+        out = tmp_path / "tool.exe"
+
+        def build() -> None:
+            out.write_text("bin")
+
+        registry = TaskRegistry()
+        registry.register(lambda: None, name="build_assets", outputs=[icon])
+        registry.register(
+            build,
+            name="build_native",
+            inputs=[value("build-config", "opt=1"), icon, "build_assets"],
+            outputs=[out],
+        )
+        registry.finalize()
+
+        self._executor(registry, tmp_path).run("build_native")
+
+        from pymake.state import StateStore
+
+        store = StateStore(tmp_path / "state")
+        data = json.loads(store.path_for("build_native").read_text())
+        assert set(data["paths"]) == {icon.as_posix()}
+        assert set(data["deps"]) == {"build_assets"}
+        assert set(data["inputs"]) == {"build-config"}

@@ -3,13 +3,39 @@
 from __future__ import annotations
 
 import concurrent.futures
+import dataclasses
 import sys
 import threading
+from pathlib import Path
 from typing import TextIO
 
 from .resolver import CyclicDependencyError, DependencyResolver
+from .staleness import (
+    FingerprintCache,
+    Snapshot,
+    change_reason,
+    diff_record,
+    take_snapshot,
+)
+from .state import StateStore, TaskState
 from .task import Task, TaskRegistry
 from .vars import VarsResolver
+
+#: Default per-task state root, relative to the working directory.
+DEFAULT_STATE_DIR = Path(".pymake") / "state"
+
+
+@dataclasses.dataclass
+class Decision:
+    """Whether (and why) a task runs, plus the data the decision was made on."""
+
+    run: bool
+    reason: str
+    # Decision-time fingerprints — recorded on bootstrap, and the baseline
+    # for the post-run divergence check. None when the task records nothing.
+    pre: Snapshot | None = None
+    # Record the pre-run snapshot without running (legacy mtime migration).
+    bootstrap: bool = False
 
 
 class ExecutionError(Exception):
@@ -73,6 +99,7 @@ class Executor:
         force: bool = False,
         verbose: bool = True,
         output: TextIO | None = None,
+        state_dir: str | Path | None = None,
     ) -> None:
         self.registry = registry
         self.resolver = DependencyResolver(registry)
@@ -82,6 +109,10 @@ class Executor:
         self.verbose = verbose
         self.output = output or sys.stdout
         self.vars_resolver = vars_resolver or VarsResolver()
+        self.state = StateStore(
+            state_dir if state_dir is not None else DEFAULT_STATE_DIR
+        )
+        self._fingerprints = FingerprintCache()
         self._vars_validated = False
         self._lock = threading.Lock()
 
@@ -239,6 +270,77 @@ class Executor:
 
         return any_executed
 
+    def _decide(self, task: Task) -> Decision:
+        """The single staleness rule:
+
+        run = cli_force or fingerprints_changed or outputs_missing or no_record
+
+        Legacy tasks — no Input objects — keep their historical semantics:
+        a task with no outputs always runs (phony), and a task with no
+        fingerprint record yet falls back to the mtime comparison once,
+        bootstrapping a record so subsequent runs use fingerprints.
+        """
+        # Records exist for tasks that participate in fingerprint gating.
+        trackable = bool(task.outputs or task.input_objects)
+        fingerprintable = trackable and bool(
+            task.inputs or task.depends or task.input_objects
+        )
+        pre = (
+            take_snapshot(task, self.registry, self._fingerprints)
+            if fingerprintable
+            else None
+        )
+
+        if self.force:
+            return Decision(True, "forced", pre)
+
+        if not trackable:
+            # Legacy phony: no outputs and no Input objects — always runs.
+            return Decision(True, "", None)
+
+        for out in task.outputs:
+            if not out.exists():
+                return Decision(True, f"output {out} missing", pre)
+
+        if pre is None:
+            # Outputs exist and there is nothing to fingerprint.
+            return Decision(False, "up to date", None)
+
+        record = self.state.load(task.name)
+        if record is None:
+            if task.input_objects:
+                return Decision(True, "no record", pre)
+            # Transparent migration for path/dep-only tasks: decide by the
+            # historical mtime rule once, and record fingerprints either way
+            # (post-run below, or via bootstrap here on a skip).
+            if task.should_run(False):
+                return Decision(True, "stale", pre)
+            return Decision(False, "up to date", pre, bootstrap=True)
+
+        changes = diff_record(record, pre)
+        if changes:
+            return Decision(True, change_reason(changes), pre)
+        return Decision(False, "unchanged", pre)
+
+    def _record_state(self, task: Task, snap: Snapshot) -> None:
+        self.state.save(
+            task.name,
+            TaskState(paths=snap.paths, deps=snap.deps, inputs=snap.inputs),
+        )
+
+    def _record_after_run(self, task: Task, decision: Decision) -> None:
+        """Re-walk every input FRESH and record the fingerprints.
+
+        Recording is the executor's job, part of the contract — there is no
+        commit protocol to discover, nothing a wrapper function can
+        disconnect. Recording post-run (not from the pre-run walk) means a
+        task that touches its own inputs settles instead of looping.
+        """
+        if decision.pre is None:
+            return
+        post = take_snapshot(task, self.registry, self._fingerprints, fresh=True)
+        self._record_state(task, post)
+
     def _execute_task(self, task: Task) -> bool:
         """
         Execute a single task if needed.
@@ -247,9 +349,11 @@ class Executor:
         """
         self._validate_vars_once()
 
-        # Check if task should run based on file timestamps
-        if not task.should_run(self.force):
-            self.log(f"[skip] {task.name} (up to date)")
+        decision = self._decide(task)
+        if not decision.run:
+            if decision.bootstrap and decision.pre is not None:
+                self._record_state(task, decision.pre)
+            self.log(f"[skip] {task.name} ({decision.reason})")
             return False
 
         # --force bypasses run_if / run_if_not entirely: force means force.
@@ -275,8 +379,9 @@ class Executor:
             if not input_path.exists():
                 raise MissingInputError(task.name, str(input_path))
 
-        # Execute the task
-        self.log(f"[run] {task.name}")
+        # Execute the task; the decision line says why it runs.
+        suffix = f" ({decision.reason})" if decision.reason else ""
+        self.log(f"[run] {task.name}{suffix}")
         try:
             kwargs = self.vars_resolver.resolve(task)
             task.func(**kwargs)
@@ -311,6 +416,10 @@ class Executor:
                 commit()
             except Exception as e:
                 raise ExecutionError(task.name, e) from e
+
+        # Record fingerprints from a fresh post-run walk. Forced runs record
+        # normally, so a forced build settles state and the next run skips.
+        self._record_after_run(task, decision)
 
         return True
 

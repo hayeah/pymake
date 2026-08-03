@@ -161,6 +161,9 @@ class TaskContext:
     def __init__(self, *, cwd: Path | None = None) -> None:
         self.cwd: Path = Path(cwd).resolve() if cwd is not None else Path.cwd()
         self.registry: TaskRegistry = TaskRegistry()
+        # Per-task fingerprint records live under the context's cwd, so a
+        # disposable context never writes state outside its own tree.
+        self.state_dir: Path = self.cwd / ".pymake" / "state"
         self._decorator = _ContextDecorator(self)
 
     @property
@@ -271,6 +274,7 @@ class TaskContext:
             parallel=use_parallel,
             max_workers=jobs,
             force=force,
+            state_dir=self.state_dir,
         )
         return executor.run(resolved_target)
 
@@ -301,6 +305,7 @@ class TaskContext:
             self.registry,
             parallel=False,  # per-task force toggling needs sequential control
             force=False,
+            state_dir=self.state_dir,
         )
         _ = parallel, jobs  # accepted for API parity; sequential by design here
 
