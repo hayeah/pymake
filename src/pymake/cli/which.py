@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import argparse
-
 from rich.tree import Tree
 
 from ..task import Task
+from .command import Subparsers
 from .context import CommandContext
 
 
@@ -17,7 +16,7 @@ class WhichCommand:
         self.ctx = ctx
 
     @staticmethod
-    def add_arguments(subparsers: argparse._SubParsersAction) -> None:
+    def add_arguments(subparsers: Subparsers) -> None:
         """Add which command arguments."""
         parser = subparsers.add_parser(
             "which", help="Show dependency tree for a task or output"

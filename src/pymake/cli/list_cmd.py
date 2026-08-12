@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 
 from ..task import TaskVar
+from .command import Subparsers
 from .context import CommandContext
 
 
@@ -16,7 +16,7 @@ class ListCommand:
         self.ctx = ctx
 
     @staticmethod
-    def add_arguments(subparsers: argparse._SubParsersAction) -> None:
+    def add_arguments(subparsers: Subparsers) -> None:
         """Add list command arguments."""
         parser = subparsers.add_parser("list", help="List registered tasks")
         parser.add_argument(

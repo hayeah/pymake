@@ -27,13 +27,14 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 
-try:
+if sys.version_info >= (3, 11):
     import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
-    import tomli as tomllib  # type: ignore[no-redef]
+else:  # pragma: no cover - Python 3.10 fallback
+    import tomli as tomllib
 
 ENV_GUARD = "PYMAKE_UV_PROJECT"
 ENV_DISABLE = "PYMAKE_NO_UV"

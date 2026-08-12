@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import argparse
 import sys
 
 from ..doctor import Doctor
+from .command import Subparsers
 from .context import CommandContext
 
 
@@ -16,7 +16,7 @@ class DoctorCommand:
         self.ctx = ctx
 
     @staticmethod
-    def add_arguments(subparsers: argparse._SubParsersAction) -> None:
+    def add_arguments(subparsers: Subparsers) -> None:
         """Add doctor command arguments."""
         parser = subparsers.add_parser("doctor", help="Check for dependency issues")
         parser.add_argument(

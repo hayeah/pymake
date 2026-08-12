@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import argparse
-
+from .command import Subparsers
 from .context import CommandContext
 
 
@@ -14,7 +13,7 @@ class GraphCommand:
         self.ctx = ctx
 
     @staticmethod
-    def add_arguments(subparsers: argparse._SubParsersAction) -> None:
+    def add_arguments(subparsers: Subparsers) -> None:
         """Add graph command arguments."""
         parser = subparsers.add_parser("graph", help="Generate DOT graph for a target")
         parser.add_argument("target", help="Target to graph")

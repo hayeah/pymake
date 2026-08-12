@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import argparse
-
 from ..executor import Executor
 from ..task import Task
+from .command import Subparsers
 from .context import CommandContext
 
 
@@ -16,7 +15,7 @@ class RedoCommand:
         self.ctx = ctx
 
     @staticmethod
-    def add_arguments(subparsers: argparse._SubParsersAction) -> None:
+    def add_arguments(subparsers: Subparsers) -> None:
         """Add redo command arguments."""
         parser = subparsers.add_parser(
             "redo", help="Force re-run a target and its dependents"

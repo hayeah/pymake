@@ -38,6 +38,7 @@ dev = [
     "pytest",
     "mypy",
     "ruff",
+    "tomli",
 ]
 
 [tool.setuptools.packages.find]

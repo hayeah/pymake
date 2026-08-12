@@ -12,6 +12,7 @@ from .. import uvboot
 from ..executor import ExecutionError, MissingOutputError
 from ..task import task
 from .clean import CleanCommand
+from .command import CommandHandler
 from .context import CommandContext
 from .doctor import DoctorCommand
 from .graph import GraphCommand
@@ -21,7 +22,7 @@ from .run import RunCommand
 from .which import WhichCommand
 
 # Map command names to their handler classes
-COMMANDS = {
+COMMANDS: dict[str, type[CommandHandler]] = {
     "list": ListCommand,
     "graph": GraphCommand,
     "run": RunCommand,

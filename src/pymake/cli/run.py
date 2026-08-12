@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import argparse
 import sys
 
 from ..executor import Executor
 from ..task import Task
+from .command import Subparsers
 from .context import CommandContext
 
 
@@ -17,7 +17,7 @@ class RunCommand:
         self.ctx = ctx
 
     @staticmethod
-    def add_arguments(subparsers: argparse._SubParsersAction) -> None:
+    def add_arguments(subparsers: Subparsers) -> None:
         """Add run command arguments."""
         parser = subparsers.add_parser("run", help="Run specified targets")
         parser.add_argument("targets", nargs="+", help="Targets to run")

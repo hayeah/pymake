@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from pymake import tree_digest
-from pymake.digest import TreeDigest
+from pymake.digest import TreeDigest, _TreeEntry
 
 # ----------------------------------------------------------------------
 # Helpers
@@ -251,7 +251,7 @@ class TestStateFile:
         calls = 0
         original = TreeDigest._aggregate_digest
 
-        def record_call(self: TreeDigest, entries: list[object]) -> str:
+        def record_call(self: TreeDigest, entries: list[_TreeEntry]) -> str:
             nonlocal calls
             calls += 1
             return original(self, entries)

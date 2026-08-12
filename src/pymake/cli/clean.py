@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import argparse
 import sys
 from pathlib import Path
 
 from ..task import Task
+from .command import Subparsers
 from .context import CommandContext
 
 
@@ -17,7 +17,7 @@ class CleanCommand:
         self.ctx = ctx
 
     @staticmethod
-    def add_arguments(subparsers: argparse._SubParsersAction) -> None:
+    def add_arguments(subparsers: Subparsers) -> None:
         """Add clean command arguments."""
         parser = subparsers.add_parser("clean", help="Clean output files of tasks")
         parser.add_argument(
