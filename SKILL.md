@@ -621,6 +621,152 @@ class DirSize:
   [--only]`. Forced runs record fingerprints normally, so a forced build
   settles state and the next ordinary run skips.
 
+### Tip: convergent system configuration (check / exec / verify)
+
+System configuration is not a build: the "output" is world state (a user
+exists, a firewall chain is loaded), and the world can drift behind your
+back. A touch file records that a task *ran once*; an Input whose
+fingerprint **probes the asserted state** records what the world *is* — and
+the standard staleness rule then reads as convergence:
+
+- no record yet → run. A host that is already conformant is **adopted**:
+  the body no-ops, verify passes, the record bootstraps.
+- the state drifted, or the desired state changed → `[run] ... (input X
+  changed)`.
+- otherwise → `[skip] ... (unchanged)`.
+
+None of this is pymake API — it is one ordinary class plugged into both
+existing protocols at once. The instance is the Input (`id` +
+`fingerprint()`) *and* the task body (`__call__`):
+
+```python
+import json
+
+from pymake import sh, task
+
+
+class Converge:
+    """check / exec / verify as one task; the state record is the marker.
+
+    check() returns a JSON-able, deterministic description of the CURRENT
+    state, normalized to ONLY the properties this step asserts. It must be
+    an idempotent read; exec() receives it to direct what work is needed.
+    """
+
+    id: str
+    desired: object  # the conformant check() result — each subclass declares it
+
+    # Input half: staleness IS world state.
+    def fingerprint(self) -> str:
+        return json.dumps(self.check(), sort_keys=True, separators=(",", ":"))
+
+    # Task half: guarded exec, then verify. A failed verify raises, which
+    # blocks the record — the step retries on the next run instead of
+    # recording a half-configured state as done.
+    def __call__(self) -> None:
+        state = self.check()
+        if state == self.desired:
+            return
+        self.exec(state)
+        state = self.check()
+        if state != self.desired:
+            raise SystemExit(f"{self.id}: still non-conformant after exec: {state}")
+```
+
+A resource class is desired state as constructor data plus the lifecycle
+methods:
+
+```python
+class EnsureUser(Converge):
+    """The service user exists, with the required supplementary groups."""
+
+    desired = {"user": "present", "missing_groups": []}
+
+    def __init__(self, id: str, user: str, groups=()):
+        self.id = id
+        self.user = user
+        self.groups = tuple(groups)
+
+    def check(self) -> dict:
+        if not sh(f"getent passwd {self.user}", capture=True, check=False):
+            return {"user": "absent", "missing_groups": list(self.groups)}
+        current = sh(f"id -Gn {self.user}", capture=True).split()
+        return {
+            "user": "present",
+            "missing_groups": [g for g in self.groups if g not in current],
+        }
+
+    def exec(self, state: dict) -> None:
+        if state["user"] == "absent":
+            sh(f"useradd --system --create-home {self.user}")
+        for group in state["missing_groups"]:
+            sh(f"usermod -aG {group} {self.user}")
+```
+
+Instantiate, then register like any normal task — the instance is the task
+body, its id is the name, and it lists **itself** as an input:
+
+```python
+app_user = EnsureUser("app-user", user="app", groups=["docker"])
+firewall = NftablesChain("app-firewall", chain="app", rules=RULES)  # elided
+
+task(app_user, name=app_user.id, inputs=[app_user])
+task(firewall, name=firewall.id, inputs=[firewall, "app-user"])
+```
+
+```
+$ pymake app-firewall                  # fresh host
+[run] app-user (no record)
+[run] app-firewall (no record)
+$ pymake app-firewall                  # nothing changed
+[skip] app-user (unchanged)
+[skip] app-firewall (unchanged)
+$ userdel app; pymake app-firewall     # out-of-band drift
+[run] app-user (input app-user changed)
+[skip] app-firewall (unchanged)
+```
+
+Why the pieces land where they do:
+
+- **check → fingerprint.** The fingerprint is the canonical JSON of the
+  check result (`sort_keys` handles dict order; keep list order stable),
+  so drift and config edits both change it, while every conformant state
+  serializes identically — a desired-state edit the host already satisfies
+  correctly skips. Keeping the result a readable object rather than a hash
+  also makes the record under `.pymake/state/` self-explanatory. `desired`
+  deliberately has no base-class default: it is the conformant check
+  result, quoted back in the verify error, so each resource declares its
+  own instead of a uniform `"ok"`.
+- **check → exec.** exec() receives the deviation it must repair: which
+  branch to take (create the user vs amend its groups) is data from the
+  probe, not something the body re-derives.
+- **exec need not be idempotent.** `useradd` fails if run twice; the check
+  guard plus verify make the composite convergent, which is what matters.
+- **verify → the record.** Fingerprints are recorded from a fresh post-run
+  walk only after success, so raising on a failed verify is what keeps
+  "tried" from being recorded as "true".
+- **touch → nothing.** A task with an Input object and no outputs is gated
+  by its per-task record; there is no marker file to invent or to lie.
+
+Registration mechanics worth knowing:
+
+- Instances have no `__name__`, so registration needs an explicit `name=`;
+  reusing the input id keeps decision lines and task names in one
+  vocabulary. The class docstring becomes the task's description in
+  `pymake list`.
+- A task may list itself as an input: `inputs=` classifies by capability,
+  so the instance lands in the Input namespace (a fingerprint source),
+  never a dependency edge — no cycle. The flip side: ordering between
+  steps must use registered *name strings* (`"app-user"` above); an
+  instance appearing in `inputs=` is always claimed as an Input.
+- A run that actually repairs drift prints the divergence warning (`input X
+  changed during the run`) — the executor noticing the task moved its own
+  input. For this pattern that is the success signature, not a bug.
+- For a genuinely unobservable one-shot (a migration with nothing to probe
+  afterward), drop the probe and gate on a `value(...)` of the migration
+  key — the record then honestly plays the touch-file role, and
+  `pymake redo` is the override.
+
 ## Custom Conditions
 
 **Deprecated:** `run_if` / `run_if_not` registration now emits a
