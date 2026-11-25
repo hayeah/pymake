@@ -982,14 +982,6 @@ output = sh("cat file", capture=True)  # Capture output
 sh("might-fail", check=False)       # Don't raise on error
 ```
 
-## SSH Connection Reuse
-
-`pymake.ssh.mux` shares one OpenSSH ControlMaster per destination across every task in a run, and exits the masters when the process ends.
-
-- `["ssh", *mux.options(), host, cmd]` reuses `host`'s master, starting it on first use.
-- `mux.options(jump="bastion")` hops through `bastion`'s master (a ProxyCommand; `-J` drops `-o` options).
-- `mux.nix_env()` gives `NIX_SSHOPTS` for `ssh://` / `ssh-ng://` stores.
-
 ## Library Use: `pymake.context(cwd=...)`
 
 For ad-hoc or parameterized pipelines that don't fit the `Makefile.py`
